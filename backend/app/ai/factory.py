@@ -9,6 +9,7 @@ up; classification quality degrades instead.
 from __future__ import annotations
 
 import logging
+import threading
 
 from app.ai.base import AIProvider, InferenceRequest, InferenceResult
 from app.ai.stub import StubProvider
@@ -57,17 +58,27 @@ def _build_provider() -> AIProvider:
 #: task needs exactly that), so the cache is explicit instead.
 _provider_cache: AIProvider | None = None
 
+#: Guards ``_provider_cache``. FastAPI runs sync routes on a threadpool, so
+#: concurrent first calls are reachable in production, not just a theoretical
+#: race. Double-construction of a stateless provider is harmless, but Task 8
+#: hangs mutable cooldown state off this exact singleton — a lost race there
+#: means lost cooldown writes and readers seeing inconsistent state. Do not
+#: remove this lock when that state is added; it is the reason it exists.
+_provider_lock = threading.Lock()
+
 
 def get_provider() -> AIProvider:
     global _provider_cache
     if _provider_cache is None:
-        _provider_cache = _build_provider()
-        logger.info(
-            "AI provider: %s (%s, is_ai=%s)",
-            _provider_cache.name,
-            _provider_cache.model,
-            _provider_cache.is_ai,
-        )
+        with _provider_lock:
+            if _provider_cache is None:  # re-check: another thread may have built it
+                _provider_cache = _build_provider()
+                logger.info(
+                    "AI provider: %s (%s, is_ai=%s)",
+                    _provider_cache.name,
+                    _provider_cache.model,
+                    _provider_cache.is_ai,
+                )
     return _provider_cache
 
 
@@ -79,7 +90,8 @@ def reset_provider_cache() -> None:
     fallback chain's cooldown state.
     """
     global _provider_cache
-    _provider_cache = None
+    with _provider_lock:
+        _provider_cache = None
 
 
 _FALLBACK = StubProvider()

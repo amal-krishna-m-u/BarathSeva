@@ -83,13 +83,44 @@ class TestClassifyException:
     def test_http_status_error_body_sniff_upgrades_non_429_to_rate_limited(self):
         """Gemini's signature failure mode: a non-429 status with a
         RESOURCE_EXHAUSTED body. The status-code classification alone would
-        call this OTHER (or SERVER); the body sniff must override it."""
+        call this OTHER; the body sniff must override it."""
         exc = self._status_error(400, body='{"error": {"status": "RESOURCE_EXHAUSTED"}}')
         assert classify_exception(exc) == ErrorKind.RATE_LIMITED
 
-    def test_http_status_error_200_adjacent_body_without_rate_limit_text_stays_other(self):
+    def test_http_status_error_403_with_non_matching_body_stays_auth(self):
         exc = self._status_error(403, body="permission denied")
-        assert classify_exception(exc) == ErrorKind.AUTH  # 403 wins; body doesn't match
+        assert classify_exception(exc) == ErrorKind.AUTH  # no rate-limit text; nothing to override
+
+    def test_http_status_error_403_with_resource_exhausted_body_upgrades_to_rate_limited(self):
+        """Google documents 403 + reason rateLimitExceeded/quotaExceeded on
+        some API surfaces. AUTH must be overridable: misreading a real
+        quota-403 as AUTH would route the fallback ladder to the stub
+        forever and never try the rate-limit fallback for this failure
+        mode."""
+        exc = self._status_error(
+            403, body='{"error": {"status": "RESOURCE_EXHAUSTED", "message": "quota exceeded"}}'
+        )
+        assert classify_exception(exc) == ErrorKind.RATE_LIMITED
+
+    def test_http_status_error_403_with_quota_exceeded_reason_upgrades_to_rate_limited(self):
+        exc = self._status_error(
+            403, body='{"error": {"errors": [{"reason": "quotaExceeded"}]}}'
+        )
+        assert classify_exception(exc) == ErrorKind.RATE_LIMITED
+
+    def test_http_status_error_401_with_matching_body_upgrades_to_rate_limited(self):
+        exc = self._status_error(401, body="Too Many Requests")
+        assert classify_exception(exc) == ErrorKind.RATE_LIMITED
+
+    def test_http_status_error_5xx_with_matching_body_stays_server(self):
+        """Pins the deliberate asymmetry: SERVER is never overridden by the
+        body sniff, even when the body happens to contain rate-limit-shaped
+        text. A 5xx carrying incidental quota text is far more likely a
+        genuine server fault than a disguised quota error, and Google has no
+        documented 5xx quota analogue. Do not "fix" this to match AUTH's
+        behaviour."""
+        exc = self._status_error(503, body="quota exceeded, service temporarily unavailable")
+        assert classify_exception(exc) == ErrorKind.SERVER
 
     def test_timeout_classifies_as_timeout_not_network(self):
         """The ordering trap: httpx.TimeoutException IS a httpx.TransportError

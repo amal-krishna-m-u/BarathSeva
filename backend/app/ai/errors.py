@@ -28,7 +28,9 @@ import httpx
 #: Case-insensitive signal that a response body carries a quota/rate-limit
 #: error even though the HTTP status code alone does not say so. Gemini's
 #: REST API in particular returns ``RESOURCE_EXHAUSTED`` in the JSON body,
-#: and not always paired with a 429 status.
+#: and not always paired with a 429 status; some Google API surfaces also
+#: report quota exhaustion as a 403 with reason ``rateLimitExceeded`` /
+#: ``quotaExceeded``.
 _RATE_LIMIT_BODY_RE = re.compile(
     r"resource_exhausted|quota|rate limit|too many requests", re.IGNORECASE
 )
@@ -83,14 +85,29 @@ def classify_exception(exc: Exception) -> str:
     so the timeout check must come first — a naive "is this a
     ``TransportError``" check first would swallow timeouts and misreport
     them as ``NETWORK``.
+
+    For ``httpx.HTTPStatusError``, the body sniff runs on every status (it is
+    redundant but harmless on 429) and *can* override an ``AUTH``
+    classification — Google documents 403 with reason ``rateLimitExceeded``
+    / ``quotaExceeded`` on some API surfaces, which is exactly this shape.
+    Misreading a real quota-403 as AUTH would route the fallback ladder to
+    the stub forever and never try the rate-limit fallback for that failure
+    mode; misreading a genuine bad-key 401/403 as RATE_LIMITED instead costs
+    one extra (harmless) hop to a fallback provider with its own key, and the
+    original error string is still preserved for the operator. AUTH is the
+    recoverable misclassification, so the sniff is allowed to win there.
+
+    The sniff does **not** override ``SERVER``: a 5xx carrying incidental
+    quota-shaped text is far more likely a genuine server fault — Google has
+    no documented 5xx quota analogue — and overriding it would widen the
+    rate-limit fallback beyond what the spec asks for ("Gemini only when
+    rate limited").
     """
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         kind = classify_http_status(status)
-        if kind != ErrorKind.RATE_LIMITED:
-            # A non-429 status can still be a disguised rate limit (Gemini's
-            # RESOURCE_EXHAUSTED is the motivating case) — sniff the body
-            # before accepting the status-code-only classification.
+        if kind not in (ErrorKind.RATE_LIMITED, ErrorKind.SERVER):
+            # kind is AUTH or OTHER here — both are allowed to be upgraded.
             try:
                 body = exc.response.text
             except Exception:
