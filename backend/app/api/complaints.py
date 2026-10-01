@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.api import serializers
+from app.api.deps import reporter_only
 from app.config import settings
 from app.core import media
 from app.core.security import issue_capture_token
@@ -40,7 +41,7 @@ ALLOWED_MIMES = {"image/jpeg", "image/jpg", "image/png", "image/webp", "image/he
 def create_capture_token(
     payload: CaptureTokenRequest,
     db: Session = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user_optional),
+    current_user: Optional[User] = Depends(reporter_only),
 ) -> CaptureTokenResponse:
     """Issue a short-lived, single-use capture token (evidence Layer 1).
 
@@ -84,7 +85,7 @@ async def create_complaint(
     reporter_name: Optional[str] = Form(None),
     photo: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user_optional),
+    current_user: Optional[User] = Depends(reporter_only),
 ) -> ComplaintSubmitResponse:
     """Submit a complaint. One message is enough to start the whole workflow.
 

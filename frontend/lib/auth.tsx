@@ -37,6 +37,17 @@ interface AuthState {
 
 const AuthContext = createContext<AuthState | null>(null);
 
+/**
+ * Staff roles: the department desk and the command center.
+ *
+ * Mirrors `UserRole.is_staff` on the backend. Staff triage and resolve what
+ * citizens report; they cannot file reports themselves, which the API enforces
+ * independently of anything rendered here.
+ */
+export function isStaffRole(role: Role | undefined): boolean {
+  return role === "DEPT_ADMIN" || role === "SUPER_ADMIN";
+}
+
 /** Where each role lands after signing in. */
 export function homeForRole(role: Role): string {
   if (role === "SUPER_ADMIN") return "/admin";
