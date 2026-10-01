@@ -100,6 +100,70 @@ def _expected(req: InferenceRequest) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------
+# Guard: pin the literal prompt markers mock_llm.py's verify/classify
+# regexes depend on.
+#
+# Unlike cluster_summary/social/resolution — which recover their whole
+# context dict from a single embedded JSON blob — _verify_context() and
+# _classify_context() in app/api/mock_llm.py recover context by matching
+# exact substrings out of the prose app.ai.prompts.build_verify() and
+# build_classify() produce ('Citizen report: "', 'Photograph attached:',
+# 'Ward:', 'Corroborating reports nearby:'). If someone rewords those
+# prompts (a legitimate thing to do — prompt wording is a model-quality
+# lever, not a mock's concern), the regexes silently stop matching and
+# the mock falls back to an empty/default context instead of raising.
+#
+# That failure mode is NOT fully silent today: test_openai_verify_matches_stub
+# and test_openai_classify_matches_stub build their *expected* value from the
+# real StubProvider fed the TRUE context, while the mock's actual response is
+# built from the regex-RECOVERED context — so a prompt reword that changes
+# the stub's verdict (e.g. is_civic_issue flips True -> False) does surface
+# as a failing assertion elsewhere in this file. But that protection is
+# incidental: it only holds for fixtures whose verdict actually changes under
+# degraded parsing, and the failure it produces reads as "mock disagrees with
+# stub" — true, but it does not name the actual cause. This test exists so a
+# prompt wording change fails HERE first, with a message that says exactly
+# which marker moved, instead of forcing a developer to rediscover that
+# mock_llm.py parses prompt prose at all.
+# --------------------------------------------------------------------------
+
+
+def test_prompt_markers_mock_llm_depends_on_are_present():
+    """Pins the exact substrings app/api/mock_llm.py's _verify_context() and
+    _classify_context() regex-match out of app.ai.prompts' prose. These two
+    tasks (alone among the five) are NOT recovered from an embedded JSON
+    blob, so they are only as robust as this wording staying put. If this
+    test fails, app/ai/prompts.py was reworded — go update the corresponding
+    regex in app/api/mock_llm.py, not this test."""
+    verify_req = prompts.build_verify(
+        description="A pothole on MG Road",
+        has_photo=True,
+        image_readable=True,
+        authenticity_score=0.5,
+        authenticity_outcome="AUTO_ACCEPT",
+        signals=[],
+    )
+    verify_text = verify_req.system + "\n\n" + verify_req.user
+
+    classify_req = prompts.build_classify(
+        description="A pothole on MG Road",
+        nearby_count=2,
+        ward_name="Koramangala",
+        category_hint=None,
+    )
+    classify_text = classify_req.system + "\n\n" + classify_req.user
+
+    # _verify_context() markers
+    assert 'Citizen report: "' in verify_text
+    assert "Photograph attached:" in verify_text
+
+    # _classify_context() markers
+    assert 'Citizen report: "' in classify_text
+    assert "Ward:" in classify_text
+    assert "Corroborating reports nearby:" in classify_text
+
+
+# --------------------------------------------------------------------------
 # Happy path: each task, OpenAI shape, verdicts agree with StubProvider.
 # --------------------------------------------------------------------------
 
