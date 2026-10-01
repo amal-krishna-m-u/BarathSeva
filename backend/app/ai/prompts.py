@@ -21,6 +21,23 @@ _JSON_RULE = (
     "markdown. Include every field in the schema."
 )
 
+IMAGE_MATCH_SYSTEM = (
+    "You are the image gate of a municipal civic-complaint pipeline in India. "
+    "Your only job is to compare the citizen's words with the photograph they "
+    "attached and say whether the photograph actually shows what the words "
+    "describe.\n\n"
+    "You are NOT judging whether the complaint sounds reasonable. The text may "
+    "describe a perfectly real problem while the photograph shows something "
+    "else entirely — that is the exact case you exist to catch.\n\n"
+    "Set image_matches_text to false whenever the photograph does not show the "
+    "reported problem: a photograph of a person or group, an indoor scene, a "
+    "screenshot, a meme, a stock or illustrated image, a blank or unreadable "
+    "frame, or simply a different subject from the one described.\n\n"
+    "You cannot establish where or when a photo was taken, and you must not "
+    "guess at it. Judge only whether the visible subject matches the words.\n\n"
+    + _JSON_RULE
+)
+
 VERIFY_SYSTEM = (
     "You are the verification gate of a municipal civic-complaint pipeline in "
     "India. You decide whether a citizen's report describes a genuine civic "
@@ -220,4 +237,42 @@ def build_resolution(**context: Any) -> InferenceRequest:
         user=user,
         schema={"message": "string, max 3 sentences", "confidence": "number"},
         context=context,
+    )
+
+
+def build_image_match(
+    *,
+    description: str,
+    image_bytes: Optional[bytes] = None,
+    image_mime: Optional[str] = None,
+) -> InferenceRequest:
+    """Ask whether the attached photograph depicts what the text claims.
+
+    Deliberately a SEPARATE, single-question request rather than more fields on
+    the verify prompt: this is the one judgement that decides whether a crew is
+    sent on evidence nobody has looked at, and a prompt asked to do one thing
+    is harder to talk out of it than a prompt juggling five verdicts.
+    """
+    context = {"description": description, "has_photo": bool(image_bytes)}
+    user = (
+        f'Citizen report: "{description}"\n\n'
+        "Compare that text against the attached photograph. Does the "
+        "photograph show the problem the text describes?"
+    )
+    return InferenceRequest(
+        task=Task.IMAGE_MATCH,
+        system=IMAGE_MATCH_SYSTEM,
+        user=user,
+        schema={
+            "image_matches_text": "boolean, true only if the photo shows the reported problem",
+            "image_kind": (
+                "one of CAMERA_PHOTO_PLAUSIBLE, PERSON_OR_GROUP, INDOOR_SCENE, "
+                "SCREENSHOT_OR_REPOST, ILLUSTRATION_OR_RENDER, UNRELATED_SCENE, UNREADABLE"
+            ),
+            "concern": "string, one short sentence a citizen could be shown, or empty if it matches",
+            "confidence": "number between 0 and 1",
+        },
+        context=context,
+        image_bytes=image_bytes,
+        image_mime=image_mime,
     )

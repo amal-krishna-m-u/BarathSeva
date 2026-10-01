@@ -117,6 +117,7 @@ class TestIntakePipeline:
         assert result.accepted
         assert result.workflow_state["trace"] == [
             "evidence_gate",
+            "image_guard",
             "verifier",
             "classifier",
             "geocluster",
@@ -138,6 +139,7 @@ class TestIntakePipeline:
         runs = db.query(AgentRun).filter_by(complaint_id=result.complaint_id).all()
         assert {run.agent_name for run in runs} == {
             "evidence_gate",
+            "image_guard",
             "verifier",
             "classifier",
             "geocluster",
@@ -188,7 +190,7 @@ class TestIntakePipeline:
         assert complaint.status is ComplaintStatus.REJECTED
         # Evidence was fine — it is the verifier that stopped it.
         assert result.authenticity_outcome == AuthenticityOutcome.AUTO_ACCEPT.value
-        assert result.workflow_state["trace"] == ["evidence_gate", "verifier"]
+        assert result.workflow_state["trace"] == ["evidence_gate", "image_guard", "verifier"]
 
     def test_verifier_rejects_a_stringly_false_is_civic_issue(self, db, citizen, photo, monkeypatch):
         """Regression test for the bool("false") inversion (D1/D2).
@@ -231,7 +233,7 @@ class TestIntakePipeline:
         complaint = db.get(Complaint, result.complaint_id)
         assert complaint.status is ComplaintStatus.REJECTED
         assert complaint.is_verified is False
-        assert result.workflow_state["trace"] == ["evidence_gate", "verifier"]
+        assert result.workflow_state["trace"] == ["evidence_gate", "image_guard", "verifier"]
 
     def test_corroboration_builds_a_hotspot_and_raises_priority(
         self, db, citizen, photo
@@ -576,3 +578,166 @@ class TestStaffCannotFileReports:
             files={"photo": ("e.jpg", photo(*KORAMANGALA, seed=8), "image/jpeg")},
         )
         assert response.status_code == 200
+
+
+class TestImageGuard:
+    """The image gate: does the photograph show what the words claim?
+
+    Its defining property is that it fails CLOSED. A complaint whose image
+    could not be checked must reach a human, never a dispatched crew -- the
+    original bug was that a vision provider returning 503 silently became the
+    keyword stub, which cannot see images and approved whatever the text said.
+    """
+
+    @staticmethod
+    def _vision_provider(monkeypatch, data, *, confidence=0.9, raises=False):
+        """Install a fake provider that answers the image-match task."""
+        from app.ai import factory
+        from app.ai.base import InferenceResult, Task
+
+        class _Fake:
+            name = "fake-vision"
+            model = "fake-vision-1"
+            is_ai = True
+
+            def infer(self, request):
+                if request.task != Task.IMAGE_MATCH:
+                    # Let every other task behave like the real stub.
+                    from app.ai.stub import StubProvider
+
+                    return StubProvider().infer(request)
+                if raises:
+                    return InferenceResult(
+                        data={}, provider=self.name, model=self.model,
+                        is_ai=True, error="HTTPStatusError: 503",
+                    )
+                return InferenceResult(
+                    data=data,
+                    rationale=str(data.get("concern") or ""),
+                    confidence=confidence,
+                    provider=self.name,
+                    model=self.model,
+                    is_ai=True,
+                )
+
+        monkeypatch.setattr(factory, "get_provider", lambda: _Fake())
+
+    def test_photo_of_people_is_held_for_review_not_dispatched(
+        self, db, citizen, photo, monkeypatch
+    ):
+        """The reported bug: a convincing description plus an unrelated photo."""
+        self._vision_provider(
+            monkeypatch,
+            {
+                "image_matches_text": False,
+                "image_kind": "PERSON_OR_GROUP",
+                "concern": "The photograph shows two people on a street, not a pothole.",
+            },
+        )
+        result = submit(
+            db, citizen, photo, "Large pothole on 5th Main, very dangerous", KORAMANGALA
+        )
+        complaint = db.get(Complaint, result.complaint_id)
+
+        assert complaint.status is ComplaintStatus.PENDING_REVIEW
+        assert complaint.needs_human_review is True
+        # Held, NOT rejected: a human decides, the citizen is not turned away.
+        assert complaint.status is not ComplaintStatus.REJECTED
+        assert result.workflow_state["trace"] == ["evidence_gate", "image_guard"]
+
+    def test_matching_photo_passes_through_to_dispatch(
+        self, db, citizen, photo, monkeypatch
+    ):
+        self._vision_provider(
+            monkeypatch,
+            {
+                "image_matches_text": True,
+                "image_kind": "CAMERA_PHOTO_PLAUSIBLE",
+                "concern": "",
+            },
+        )
+        result = submit(
+            db, citizen, photo, "Large pothole near Koramangala 5th Block, very deep",
+            KORAMANGALA,
+        )
+        complaint = db.get(Complaint, result.complaint_id)
+
+        assert complaint.status is ComplaintStatus.DISPATCHED
+        assert complaint.needs_human_review is False
+        assert "image_guard" in result.workflow_state["trace"]
+
+    def test_provider_failure_holds_instead_of_auto_approving(
+        self, db, citizen, photo, monkeypatch
+    ):
+        """Fail closed. This is the 503 case that caused the original bug."""
+        self._vision_provider(monkeypatch, {}, raises=True)
+        result = submit(
+            db, citizen, photo, "Large pothole near the junction, very deep", KORAMANGALA
+        )
+        complaint = db.get(Complaint, result.complaint_id)
+
+        assert complaint.status is ComplaintStatus.PENDING_REVIEW
+        assert complaint.needs_human_review is True
+        assert complaint.status is not ComplaintStatus.DISPATCHED
+
+        run = (
+            db.query(AgentRun)
+            .filter_by(complaint_id=result.complaint_id, agent_name="image_guard")
+            .one()
+        )
+        assert run.output["reason_code"] == "CHECK_UNAVAILABLE"
+        assert run.output["checked"] is False
+
+    def test_low_confidence_is_held_rather_than_trusted(
+        self, db, citizen, photo, monkeypatch
+    ):
+        self._vision_provider(
+            monkeypatch,
+            {"image_matches_text": True, "image_kind": "CAMERA_PHOTO_PLAUSIBLE", "concern": ""},
+            confidence=0.1,
+        )
+        result = submit(db, citizen, photo, "Pothole on the main road here", KORAMANGALA)
+        complaint = db.get(Complaint, result.complaint_id)
+
+        assert complaint.needs_human_review is True
+        assert complaint.status is ComplaintStatus.PENDING_REVIEW
+
+    def test_hallucinated_image_kind_degrades_to_held(
+        self, db, citizen, photo, monkeypatch
+    ):
+        """An invented category is not a pass. as_enum sends it to UNREADABLE."""
+        self._vision_provider(
+            monkeypatch,
+            {"image_matches_text": True, "image_kind": "LOOKS_FINE_TO_ME", "concern": ""},
+        )
+        result = submit(db, citizen, photo, "Pothole on the main road here", KORAMANGALA)
+        complaint = db.get(Complaint, result.complaint_id)
+
+        assert complaint.needs_human_review is True
+        run = (
+            db.query(AgentRun)
+            .filter_by(complaint_id=result.complaint_id, agent_name="image_guard")
+            .one()
+        )
+        assert run.output["image_kind"] == "UNREADABLE"
+
+    def test_keyless_stub_does_not_manufacture_a_review_queue(self, db, citizen, photo):
+        """Running deliberately without a vision provider is not a failure.
+
+        The system never claimed to inspect images, so holding every complaint
+        would be a false signal. The whole offline suite depends on this.
+        """
+        result = submit(
+            db, citizen, photo, "Large pothole near Koramangala 5th Block, very deep",
+            KORAMANGALA,
+        )
+        complaint = db.get(Complaint, result.complaint_id)
+
+        assert complaint.status is ComplaintStatus.DISPATCHED
+        run = (
+            db.query(AgentRun)
+            .filter_by(complaint_id=result.complaint_id, agent_name="image_guard")
+            .one()
+        )
+        assert run.output["reason_code"] == "NO_VISION_PROVIDER"
+        assert run.output["checked"] is False

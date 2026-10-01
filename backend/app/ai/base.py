@@ -21,6 +21,8 @@ from app.ai.errors import ErrorKind
 class Task:
     """Named inference tasks. The stub provider branches on these."""
 
+    #: Does the photograph actually depict what the citizen's text claims?
+    IMAGE_MATCH = "image_match"
     VERIFY = "verify"
     CLASSIFY = "classify"
     CLUSTER_SUMMARY = "cluster_summary"

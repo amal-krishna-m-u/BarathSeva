@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 from langgraph.graph import END, StateGraph
 
-from app.agents import classifier, dispatcher, geocluster, resolution, sla_monitor, social
+from app.agents import classifier, dispatcher, geocluster, image_guard, resolution, sla_monitor, social
 from app.agents import verifier
 from app.agents.base import AgentResult, execute
 from app.core.enums import AgentStatus, AuthenticityOutcome, ComplaintStatus, EventType
@@ -114,6 +114,51 @@ def evidence_gate_node(state: ComplaintState) -> dict[str, Any]:
             "needs_human_review": complaint.needs_human_review,
             "status": complaint.status.value,
             "trace": _trace(state, "evidence_gate"),
+        }
+
+
+def image_guard_node(state: ComplaintState) -> dict[str, Any]:
+    """Compare the photograph against the text before anything is dispatched.
+
+    Placed ahead of the verifier on purpose: the verifier weighs text, image
+    and forensic signals together and can be carried by a convincing
+    description, which is how a photo of two people on a street reached
+    DISPATCHED. This node asks only "does the picture show what the words
+    say", and a no routes to a human instead of to a crew.
+    """
+    with SessionLocal() as db:
+        complaint = _load(db, state["complaint_id"])
+        result = image_guard.run(db, complaint, dict(state))
+
+        held = result.output.get("decision") == image_guard.ROUTE_HOLD
+        if held:
+            complaint.needs_human_review = True
+            complaint.status = ComplaintStatus.PENDING_REVIEW
+            append_event(
+                db,
+                complaint.id,
+                EventType.HELD_FOR_REVIEW,
+                result.rationale,
+                {
+                    "reason_code": result.output.get("reason_code"),
+                    "image_kind": result.output.get("image_kind"),
+                    "image_matches_text": result.output.get("image_matches_text"),
+                    "checked": result.output.get("checked"),
+                    "confidence": result.confidence,
+                },
+                actor=image_guard.AGENT_NAME,
+            )
+        db.commit()
+
+        return {
+            "image_checked": bool(result.output.get("checked")),
+            "image_matches_text": result.output.get("image_matches_text"),
+            "image_kind": result.output.get("image_kind"),
+            "halted": held,
+            "halt_reason": result.rationale if held else None,
+            "needs_human_review": complaint.needs_human_review,
+            "status": complaint.status.value,
+            "trace": _trace(state, "image_guard"),
         }
 
 
@@ -237,11 +282,12 @@ def _route(state: ComplaintState) -> str:
 
 
 def build_intake_graph():
-    """Intake pipeline: evidence gate -> verify -> classify -> locate ->
-    dispatch -> SLA -> amplify."""
+    """Intake pipeline: evidence gate -> image guard -> verify -> classify ->
+    locate -> dispatch -> SLA -> amplify."""
     graph = StateGraph(ComplaintState)
 
     graph.add_node("evidence_gate", evidence_gate_node)
+    graph.add_node("image_guard", image_guard_node)
     graph.add_node("verifier", verifier_node)
     graph.add_node("classifier", classifier_node)
     graph.add_node("geocluster", geocluster_node)
@@ -251,7 +297,10 @@ def build_intake_graph():
 
     graph.set_entry_point("evidence_gate")
     graph.add_conditional_edges(
-        "evidence_gate", _route, {ROUTE_CONTINUE: "verifier", ROUTE_HALT: END}
+        "evidence_gate", _route, {ROUTE_CONTINUE: "image_guard", ROUTE_HALT: END}
+    )
+    graph.add_conditional_edges(
+        "image_guard", _route, {ROUTE_CONTINUE: "verifier", ROUTE_HALT: END}
     )
     graph.add_conditional_edges(
         "verifier", _route, {ROUTE_CONTINUE: "classifier", ROUTE_HALT: END}
