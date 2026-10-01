@@ -22,7 +22,8 @@ from PIL import Image
 
 from app.ai.base import InferenceRequest, Task
 from app.ai.errors import ErrorKind
-from app.ai.gemini_provider import GeminiProvider, _downscale_or_drop_image
+from app.ai.gemini_provider import GeminiProvider
+from app.ai.images import prepare_image_for_inference
 from app.config import settings
 
 API_KEY = "test-gemini-key-123"
@@ -277,7 +278,11 @@ class TestImageInlining:
         original = _large_jpeg_bytes()
         assert len(original) > 5_000  # sanity: the fixture is actually oversized
 
-        downscaled, mime = _downscale_or_drop_image(original, "image/jpeg")
+        # The size guard is now shared with NvidiaProvider (app/ai/images.py);
+        # this asserts the contract GeminiProvider.infer relies on.
+        downscaled, mime = prepare_image_for_inference(
+            original, settings.ai_max_image_bytes, "image/jpeg"
+        )
 
         assert downscaled is not None
         assert mime == "image/jpeg"
@@ -311,7 +316,9 @@ class TestImageInlining:
         garbage = b"this is not an image, just padding bytes" * 5
         assert len(garbage) > 10
 
-        result_bytes, result_mime = _downscale_or_drop_image(garbage, "image/jpeg")
+        result_bytes, result_mime = prepare_image_for_inference(
+            garbage, settings.ai_max_image_bytes, "image/jpeg"
+        )
 
         assert result_bytes is None
         assert result_mime is None

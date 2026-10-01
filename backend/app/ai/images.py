@@ -10,7 +10,8 @@ dependency, see ``app/core/hashing.py`` and ``app/core/exif.py`` for other
 uses); if Pillow cannot make sense of the bytes at all, the image is dropped
 and the caller proceeds text-only rather than failing the inference.
 
-Owned by Task 3, used by ``NvidiaProvider``; a later task may import it too.
+Used by ``NvidiaProvider`` and ``GeminiProvider`` — the single size guard
+for every vision-capable provider.
 """
 
 from __future__ import annotations
@@ -26,6 +27,11 @@ logger = logging.getLogger(__name__)
 #: close the gap to budget.
 _REENCODE_QUALITY = 85
 
+#: What the re-encode path always produces, and therefore what it must
+#: report. Hard-coded rather than derived because the ``save`` call below is
+#: hard-coded to JPEG too; the two must never drift apart.
+_REENCODED_MIME = "image/jpeg"
+
 #: Upper bound on halving iterations. A realistic phone photo (≤ ~50MP) needs
 #: nowhere near this many halvings to drop under a few-megabyte budget; the
 #: cap just guarantees the loop terminates instead of relying on that.
@@ -33,25 +39,33 @@ _MAX_ITERATIONS = 6
 
 
 def prepare_image_for_inference(
-    image_bytes: Optional[bytes], max_bytes: int
-) -> Optional[bytes]:
-    """Return image bytes safe to hand to a vision model, or ``None``.
+    image_bytes: Optional[bytes], max_bytes: int, mime: Optional[str] = None
+) -> tuple[Optional[bytes], Optional[str]]:
+    """Return ``(bytes, media_type)`` safe to hand to a vision model.
 
-    - No bytes in -> ``None`` out (nothing to send).
-    - At or under ``max_bytes`` -> returned unchanged (no re-encode cost for
-      the common case).
+    The media type is returned alongside the bytes, never assumed by the
+    caller, because the re-encode path CHANGES it: a 5MB PNG comes back as
+    JPEG, and a provider told ``image/png`` while being handed JPEG bytes is
+    being lied to. Strict decoders reject that mismatch, which loses the photo
+    on exactly the uploads most likely to need downscaling — and loses it
+    silently, since the text half of the request still answers.
+
+    - No bytes in -> ``(None, None)`` (nothing to send).
+    - At or under ``max_bytes`` -> returned unchanged, keeping the caller's
+      own ``mime`` (no re-encode cost, and no relabelling, for the common case).
     - Over ``max_bytes`` -> repeatedly halved and re-encoded as JPEG until it
       fits or the iteration cap is hit (in which case the smallest size
-      reached is returned — still better than the original).
-    - Any failure decoding, converting or re-encoding the image -> ``None``.
-      Callers must treat ``None`` as "proceed text-only", not as an error:
-      a photo a citizen cannot usefully get on the record is better handled
-      by dropping it than by losing the whole complaint.
+      reached is returned — still better than the original), reported as
+      ``image/jpeg``.
+    - Any failure decoding, converting or re-encoding the image ->
+      ``(None, None)``. Callers must treat that as "proceed text-only", not as
+      an error: a photo a citizen cannot usefully get on the record is better
+      dropped than allowed to lose the whole complaint.
     """
     if not image_bytes:
-        return None
+        return None, None
     if len(image_bytes) <= max_bytes:
-        return image_bytes
+        return image_bytes, mime
 
     try:
         from PIL import Image
@@ -66,14 +80,16 @@ def prepare_image_for_inference(
             img.save(buf, format="JPEG", quality=_REENCODE_QUALITY)
             encoded = buf.getvalue()
             if len(encoded) <= max_bytes:
-                return encoded
+                return encoded, _REENCODED_MIME
             width = max(1, width // 2)
             height = max(1, height // 2)
             img = img.resize((width, height), Image.Resampling.LANCZOS)
-        return encoded  # best effort: smallest size reached within the cap
+        # Best effort: the smallest size reached within the cap. Still JPEG,
+        # so still reported as JPEG even though it missed the budget.
+        return encoded, _REENCODED_MIME
     except Exception as exc:
         logger.warning(
             "image downscale failed (%s); dropping image, proceeding text-only",
             exc,
         )
-        return None
+        return None, None

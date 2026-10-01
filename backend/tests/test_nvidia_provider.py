@@ -38,14 +38,36 @@ def _provider(transport: httpx.MockTransport) -> NvidiaProvider:
     )
 
 
-def _request(image_bytes: bytes | None = None) -> InferenceRequest:
+def _request(
+    image_bytes: bytes | None = None, image_mime: str | None = None
+) -> InferenceRequest:
     return InferenceRequest(
         task=Task.CLASSIFY,
         system="You classify civic complaints.",
         user="Citizen report: pothole on MG Road.",
         schema={"category": "string", "confidence": "number"},
         image_bytes=image_bytes,
+        image_mime=image_mime,
     )
+
+
+def _noise_png(min_bytes: int) -> bytes:
+    """A real PNG guaranteed to exceed ``min_bytes``.
+
+    PNG matters specifically because it is lossless: the size guard must
+    re-encode it as JPEG to get under budget, which changes the media type.
+    """
+    from PIL import Image
+
+    size = 64
+    while True:
+        img = Image.frombytes("RGB", (size, size), os.urandom(size * size * 3))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        data = buf.getvalue()
+        if len(data) > min_bytes:
+            return data
+        size *= 2
 
 
 def _chat_completion_body(content: str) -> dict:
@@ -255,6 +277,54 @@ class TestImageHandling:
         assert len(sent_bytes) <= 20_000
         assert len(sent_bytes) < len(oversized)
 
+    def test_reencoded_png_is_declared_as_jpeg_not_its_original_mime(self, monkeypatch):
+        """A downscaled PNG becomes JPEG, so the data URI must say image/jpeg.
+
+        Sending ``data:image/png;base64,<JPEG bytes>`` is a lie to the vision
+        endpoint about what it is being handed. A strict decoder rejects the
+        mismatch outright, which would lose the photo on exactly the uploads
+        most likely to need downscaling (large screenshots and lossless
+        captures) — and lose it silently, since the text part still answers.
+        """
+        monkeypatch.setattr(settings, "ai_max_image_bytes", 20_000, raising=False)
+        oversized_png = _noise_png(20_000)
+
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(200, json=_chat_completion_body(json.dumps({"ok": True})))
+
+        provider = _provider(httpx.MockTransport(handler))
+        result = provider.infer(_request(image_bytes=oversized_png, image_mime="image/png"))
+
+        assert result.ok is True
+        user_content = captured["body"]["messages"][1]["content"]
+        image_parts = [p for p in user_content if p.get("type") == "image_url"]
+        assert len(image_parts) == 1
+        data_url = image_parts[0]["image_url"]["url"]
+        assert data_url.startswith("data:image/jpeg;base64,"), (
+            "re-encoded image must be declared as JPEG, got: " + data_url[:40]
+        )
+
+    def test_small_image_keeps_its_own_mime(self):
+        """The pass-through case must NOT be relabelled — a small PNG is still
+        a PNG, and claiming otherwise is the same class of lie in reverse."""
+        small_png = _noise_png(10)
+
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(200, json=_chat_completion_body(json.dumps({"ok": True})))
+
+        provider = _provider(httpx.MockTransport(handler))
+        provider.infer(_request(image_bytes=small_png, image_mime="image/png"))
+
+        user_content = captured["body"]["messages"][1]["content"]
+        data_url = [p for p in user_content if p.get("type") == "image_url"][0]["image_url"]["url"]
+        assert data_url.startswith("data:image/png;base64,")
+
     def test_pillow_failure_drops_image_and_proceeds_text_only(self, monkeypatch):
         monkeypatch.setattr(settings, "ai_max_image_bytes", 10, raising=False)
         garbage = b"not a real image, but longer than ten bytes"
@@ -278,18 +348,27 @@ class TestImageHandling:
 # --------------------------------------------------------------------- images.py unit tests
 class TestPrepareImageForInference:
     def test_none_in_none_out(self):
-        assert prepare_image_for_inference(None, 1000) is None
+        assert prepare_image_for_inference(None, 1000) == (None, None)
 
-    def test_small_image_returned_unchanged(self):
+    def test_small_image_returned_unchanged_with_its_mime(self):
         small = b"x" * 50
-        assert prepare_image_for_inference(small, 1000) is small
+        assert prepare_image_for_inference(small, 1000, "image/png") == (small, "image/png")
 
     def test_oversized_real_image_is_downscaled_under_budget(self):
         big = _noise_jpeg(20_000)
-        out = prepare_image_for_inference(big, 20_000)
+        out, mime = prepare_image_for_inference(big, 20_000, "image/jpeg")
         assert out is not None
         assert len(out) <= 20_000
+        assert mime == "image/jpeg"
+
+    def test_reencode_reports_jpeg_even_when_input_was_png(self):
+        """The media type must follow the bytes, not the caller's input."""
+        big_png = _noise_png(20_000)
+        out, mime = prepare_image_for_inference(big_png, 20_000, "image/png")
+        assert out is not None
+        assert mime == "image/jpeg"
+        assert out[:3] == b"\xff\xd8\xff"  # actually a JPEG
 
     def test_corrupt_bytes_over_budget_returns_none(self):
         garbage = b"\x00" * 2000
-        assert prepare_image_for_inference(garbage, 1000) is None
+        assert prepare_image_for_inference(garbage, 1000, "image/jpeg") == (None, None)

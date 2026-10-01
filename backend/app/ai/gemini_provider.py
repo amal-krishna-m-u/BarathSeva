@@ -18,7 +18,6 @@ correct for the ladder to ever reach Gemini at all.
 from __future__ import annotations
 
 import base64
-import io
 import json
 import time
 from typing import Any, Optional
@@ -27,48 +26,8 @@ import httpx
 
 from app.ai.base import InferenceRequest, InferenceResult
 from app.ai.errors import ErrorKind, classify_exception, is_rate_limit_body
+from app.ai.images import prepare_image_for_inference
 from app.config import settings
-
-
-def _downscale_or_drop_image(
-    data: bytes, mime: Optional[str]
-) -> tuple[Optional[bytes], Optional[str]]:
-    """Keep an oversized image from blowing out the request body/token
-    budget: downscale with Pillow when ``data`` exceeds
-    ``settings.ai_max_image_bytes``, and if Pillow cannot decode it, drop the
-    image entirely so inference proceeds text-only rather than failing the
-    whole request over a bad upload.
-
-    NOTE for the reviewer: this duplicates the guard Task 3 is building as
-    ``app/ai/images.py``. That module belongs to a parallel worktree and does
-    not exist here, so the same semantics are reimplemented inline, kept in
-    this one small function so it is trivially extractable. Consolidate the
-    two into a single shared helper at merge time.
-    """
-    if len(data) <= settings.ai_max_image_bytes:
-        return data, mime
-
-    try:
-        from PIL import Image
-
-        with Image.open(io.BytesIO(data)) as img:
-            rgb = img.convert("RGB")
-            width, height = rgb.size
-            buf = io.BytesIO()
-            rgb.save(buf, format="JPEG", quality=85)
-            # Halve repeatedly until under budget or too small to shrink
-            # further — a fixed quality setting with iterative resizing is
-            # simpler to reason about than a quality search, and this path
-            # only runs for the rare oversized upload.
-            while buf.tell() > settings.ai_max_image_bytes and min(width, height) > 64:
-                width = max(1, int(width * 0.75))
-                height = max(1, int(height * 0.75))
-                resized = rgb.resize((width, height))
-                buf = io.BytesIO()
-                resized.save(buf, format="JPEG", quality=85)
-            return buf.getvalue(), "image/jpeg"
-    except Exception:
-        return None, None
 
 
 class GeminiProvider:
@@ -97,7 +56,11 @@ class GeminiProvider:
 
         image_bytes, image_mime = request.image_bytes, request.image_mime
         if image_bytes:
-            image_bytes, image_mime = _downscale_or_drop_image(image_bytes, image_mime)
+            # Shared with NvidiaProvider: one size guard for every vision
+            # provider, and it reports the media type it actually produced.
+            image_bytes, image_mime = prepare_image_for_inference(
+                image_bytes, settings.ai_max_image_bytes, image_mime
+            )
 
         payload = self._build_payload(request, image_bytes, image_mime)
         url = f"{self._base_url}/v1beta/models/{self.model}:generateContent"

@@ -73,12 +73,12 @@ class NvidiaProvider:
         if request.image_bytes:
             # Oversized images are downscaled; an unreadable image is dropped
             # entirely rather than failing the whole inference (D4).
-            image_bytes = prepare_image_for_inference(
-                request.image_bytes, settings.ai_max_image_bytes
+            image_bytes, mime = prepare_image_for_inference(
+                request.image_bytes, settings.ai_max_image_bytes, request.image_mime
             )
             if image_bytes:
                 b64 = base64.b64encode(image_bytes).decode()
-                mime = request.image_mime or "image/jpeg"
+                mime = mime or "image/jpeg"
                 content.append(
                     {
                         "type": "image_url",
