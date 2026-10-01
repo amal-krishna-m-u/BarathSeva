@@ -99,12 +99,12 @@ def register_mock_routers(app: FastAPI, settings_obj: Optional[Settings] = None)
     if not settings_obj.mock_apis_enabled:
         return
 
-    from app.api import mock_llm
+    from app.api import mock_gov_api, mock_llm
 
     app.include_router(mock_llm.router)
-    # Task 7 (mock government gateway HTTP surface) and Task 11 register
-    # their routers here too — keep this the single place mock surfaces are
-    # wired up.
+    app.include_router(mock_gov_api.router)
+    # Task 11 registers its router here too — keep this the single place
+    # mock surfaces are wired up.
 
 
 register_mock_routers(app)
