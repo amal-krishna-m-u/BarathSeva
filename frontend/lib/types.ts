@@ -230,3 +230,85 @@ export interface LiveEvent {
   status: string;
   created_at: string;
 }
+
+
+// -------------------------------------------------------------------- auth
+export type Role = "CITIZEN" | "DEPT_ADMIN" | "SUPER_ADMIN";
+
+export interface DepartmentSummary {
+  id: number;
+  code: string;
+  name: string;
+  full_name: string;
+  service_label: string;
+  categories: string[];
+  is_mock: boolean;
+}
+
+export interface AuthUser {
+  id: number;
+  display_name: string;
+  email: string | null;
+  phone: string | null;
+  role: Role;
+  is_verified: boolean;
+  is_active: boolean;
+  trust_score: number;
+  reports_confirmed: number;
+  reports_rejected: number;
+  department: DepartmentSummary | null;
+  created_at: string;
+  last_login_at: string | null;
+}
+
+export interface SessionResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  expires_at: string;
+  user: AuthUser;
+}
+
+export interface DepartmentStats {
+  department: DepartmentSummary;
+  total: number;
+  unacknowledged: number;
+  in_progress: number;
+  resolved: number;
+  breached: number;
+  due_soon: number;
+  by_priority: Record<string, number>;
+  by_category: Record<string, number>;
+  by_ward: Record<string, number>;
+}
+
+// --------------------------------------------------------------- geocoding
+export interface GeocodeResult {
+  display_name: string;
+  latitude: number;
+  longitude: number;
+  category: string | null;
+  type: string | null;
+  importance: number | null;
+  inside_service_area: boolean;
+}
+
+export interface ReverseGeocodeResult {
+  display_name: string | null;
+  road: string | null;
+  suburb: string | null;
+  city: string | null;
+  postcode: string | null;
+  latitude: number;
+  longitude: number;
+  inside_service_area: boolean;
+  ward_name: string | null;
+  ward_number: string | null;
+}
+
+export type LocationSource =
+  | "device_gps"
+  | "map_picked"
+  | "geocoded"
+  | "telegram"
+  | "unknown";

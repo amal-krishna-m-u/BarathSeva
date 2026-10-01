@@ -16,7 +16,7 @@ from app.agents import resolution as resolution_agent
 from app.agents.sla_monitor import sweep
 from app.ai.factory import get_provider
 from app.api import serializers
-from app.api.deps import require_admin
+from app.core.auth import require_super_admin
 from app.config import settings
 from app.core import geo
 from app.core.enums import (
@@ -42,7 +42,13 @@ from app.schemas import (
 from app.workflow.graph import run_intake
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(require_admin)])
+# City-wide view: restricted to super admins. Department staff use
+# /api/department/*, which is scoped to their own agency.
+router = APIRouter(
+    prefix="/api/admin",
+    tags=["admin"],
+    dependencies=[Depends(require_super_admin)],
+)
 
 
 def _base_query(db: Session):

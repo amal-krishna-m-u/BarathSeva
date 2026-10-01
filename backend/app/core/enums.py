@@ -68,9 +68,35 @@ class AgentStatus(str, Enum):
 
 
 class UserRole(str, Enum):
+    """Who the account belongs to.
+
+    DEPT_ADMIN is scoped to exactly one department: the portal only ever shows
+    complaints routed to that agency. SUPER_ADMIN sees the whole city.
+    """
+
     CITIZEN = "CITIZEN"
-    OFFICER = "OFFICER"
-    ADMIN = "ADMIN"
+    DEPT_ADMIN = "DEPT_ADMIN"
+    SUPER_ADMIN = "SUPER_ADMIN"
+
+    @property
+    def is_staff(self) -> bool:
+        return self in {UserRole.DEPT_ADMIN, UserRole.SUPER_ADMIN}
+
+
+class LocationSource(str, Enum):
+    """How the reported coordinate was obtained.
+
+    A device GPS fix and a pin dragged onto a map are not equivalent evidence.
+    The first is measured; the second is asserted by the reporter, carries no
+    accuracy radius, and is recorded as such so the evidence engine can weigh
+    it accordingly.
+    """
+
+    DEVICE_GPS = "device_gps"
+    MAP_PICKED = "map_picked"
+    GEOCODED = "geocoded"
+    TELEGRAM = "telegram"
+    UNKNOWN = "unknown"
 
 
 class EventType(str, Enum):

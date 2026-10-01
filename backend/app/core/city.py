@@ -19,6 +19,13 @@ CITY_ENVELOPE_WKT = (
     "POLYGON((77.40 12.72, 77.86 12.72, 77.86 13.22, 77.40 13.22, 77.40 12.72))"
 )
 
+#: (min_lon, min_lat, max_lon, max_lat) of CITY_ENVELOPE_WKT. Used to bound
+#: geocoding searches to the serviced city instead of the whole planet.
+CITY_BOUNDS = (77.40, 12.72, 77.86, 13.22)
+
+#: Map default when a citizen has no GPS fix and must place a pin manually.
+CITY_CENTER = (12.9716, 77.5946)
+
 # Half-width of each generated ward square, in degrees (~0.55 km half / 1.1 km span).
 WARD_HALF_DEGREES = 0.005
 
@@ -66,11 +73,15 @@ def ward_polygon_wkt(seed: WardSeed, half: float = WARD_HALF_DEGREES) -> str:
     return f"MULTIPOLYGON((({ring})))"
 
 
+# The three service agencies. Names are the real Bengaluru bodies; the
+# endpoints behind them are mocks (see integrations/mock_gov.py). Every
+# complaint category maps to exactly one of these, so routing is total.
 DEPARTMENT_SEEDS = [
     {
         "code": "BBMP",
         "name": "BBMP",
         "full_name": "Bruhat Bengaluru Mahanagara Palike",
+        "service_label": "Roads & Public Works",
         "categories": [
             "POTHOLE",
             "ROAD_DAMAGE",
@@ -79,24 +90,73 @@ DEPARTMENT_SEEDS = [
             "STREETLIGHT",
             "OTHER",
         ],
-        "contact_email": "mock-bbmp@barathseva.local",
+        "contact_email": "bbmp@example.com",
         "api_base_url": "mock://bbmp",
     },
     {
         "code": "BWSSB",
         "name": "BWSSB",
         "full_name": "Bangalore Water Supply and Sewerage Board",
+        "service_label": "Water & Sewerage",
         "categories": ["WATER_LEAK", "PIPELINE_BURST", "SEWAGE"],
-        "contact_email": "mock-bwssb@barathseva.local",
+        "contact_email": "bwssb@example.com",
         "api_base_url": "mock://bwssb",
     },
     {
         "code": "BESCOM",
         "name": "BESCOM",
         "full_name": "Bangalore Electricity Supply Company Limited",
+        "service_label": "Electricity",
         "categories": ["POWER_OUTAGE"],
-        "contact_email": "mock-bescom@barathseva.local",
+        "contact_email": "bescom@example.com",
         "api_base_url": "mock://bescom",
+    },
+]
+
+# ---------------------------------------------------------------------------
+# Demo accounts.
+#
+# These exist so the prototype is explorable immediately. They are seeded ONLY
+# when the deployment is not marked production, and the password comes from
+# BARATHSEVA_DEMO_PASSWORD so a real deployment can never inherit a published
+# default. Delete this block before any real use.
+# ---------------------------------------------------------------------------
+# Addresses use example.com (RFC 2606), which validates as a normal domain but
+# is reserved for documentation and cannot deliver to anyone.
+DEMO_PASSWORD_ENV = "BARATHSEVA_DEMO_PASSWORD"
+DEFAULT_DEMO_PASSWORD = "BarathSeva#2026"
+
+DEMO_ACCOUNTS = [
+    {
+        "email": "admin@example.com",
+        "display_name": "City Super Admin",
+        "role": "SUPER_ADMIN",
+        "department_code": None,
+    },
+    {
+        "email": "water@example.com",
+        "display_name": "BWSSB Water Desk",
+        "role": "DEPT_ADMIN",
+        "department_code": "BWSSB",
+    },
+    {
+        "email": "power@example.com",
+        "display_name": "BESCOM Electricity Desk",
+        "role": "DEPT_ADMIN",
+        "department_code": "BESCOM",
+    },
+    {
+        "email": "roads@example.com",
+        "display_name": "BBMP Roads Desk",
+        "role": "DEPT_ADMIN",
+        "department_code": "BBMP",
+    },
+    {
+        "email": "citizen@example.com",
+        "display_name": "Demo Citizen",
+        "role": "CITIZEN",
+        "department_code": None,
+        "phone": "+919000000001",
     },
 ]
 

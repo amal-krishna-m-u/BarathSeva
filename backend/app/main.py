@@ -12,7 +12,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import admin, complaints, health, telegram
+from app.api import admin, auth, complaints, department, geocode, health, telegram
 from app.config import settings
 from app.core.ids import ensure_sequence
 from app.db import SessionLocal
@@ -30,6 +30,14 @@ One citizen message — text, a photo and a location — is enough to start the
 complete workflow: evidence authentication, verification, classification,
 ward mapping, cluster detection, department routing, ticket creation, SLA
 monitoring and resolution.
+
+## Access
+
+- `/api/auth/*` — registration and sign-in. Self-registration creates citizens
+  only; staff accounts are provisioned by seeding or a super admin.
+- `/api/department/*` — a department admin's inbox, scoped server-side to that
+  one agency.
+- `/api/admin/*` — city-wide view, super admins only.
 
 **Prototype scope.** Government connectivity is served by mock BBMP / BWSSB /
 BESCOM endpoints. There are no real municipal integrations. The default AI
@@ -54,7 +62,10 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
+app.include_router(auth.router)
+app.include_router(geocode.router)
 app.include_router(complaints.router)
+app.include_router(department.router)
 app.include_router(admin.router)
 app.include_router(telegram.router)
 

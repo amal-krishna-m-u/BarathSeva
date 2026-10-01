@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 # ------------------------------------------------------------------ capture
@@ -63,6 +63,7 @@ class EvidenceOut(BaseModel):
     exif_gps_distance_meters: Optional[float] = None
     editing_software: Optional[str] = None
     gps_accuracy_meters: Optional[float] = None
+    location_source: str = "unknown"
     mock_location_flag: bool = False
     inside_serviced_ward: Optional[bool] = None
     duplicate_of_complaint_id: Optional[int] = None
@@ -264,3 +265,106 @@ class SocialPostOut(BaseModel):
     eligibility_reason: Optional[str] = None
     is_published: bool
     created_at: datetime
+
+
+# --------------------------------------------------------------------- auth
+class RegisterRequest(BaseModel):
+    """Citizen self-registration. Staff accounts are never created this way."""
+
+    email: EmailStr
+    password: str = Field(..., min_length=8, max_length=256)
+    display_name: str = Field(..., min_length=2, max_length=120)
+    phone: Optional[str] = Field(None, max_length=20)
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=1, max_length=256)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=1, max_length=256)
+    new_password: str = Field(..., min_length=8, max_length=256)
+
+
+class DepartmentSummary(BaseModel):
+    id: int
+    code: str
+    name: str
+    full_name: str
+    service_label: str
+    categories: list[str] = []
+    is_mock: bool = True
+
+
+class UserOut(BaseModel):
+    id: int
+    display_name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    role: str
+    is_verified: bool
+    is_active: bool
+    trust_score: float
+    reports_confirmed: int
+    reports_rejected: int
+    department: Optional[DepartmentSummary] = None
+    created_at: datetime
+    last_login_at: Optional[datetime] = None
+
+
+class SessionResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    expires_at: datetime
+    user: UserOut
+
+
+# ------------------------------------------------------------- department
+class DepartmentStats(BaseModel):
+    department: DepartmentSummary
+    total: int
+    unacknowledged: int
+    in_progress: int
+    resolved: int
+    breached: int
+    due_soon: int
+    by_priority: dict[str, int]
+    by_category: dict[str, int]
+    by_ward: dict[str, int]
+
+
+class AcknowledgeRequest(BaseModel):
+    note: str = Field("", max_length=1000)
+
+
+class ReassignRequest(BaseModel):
+    """A department disputing ownership of a complaint."""
+
+    target_department_code: str = Field(..., min_length=2, max_length=32)
+    reason: str = Field(..., min_length=5, max_length=1000)
+
+
+# -------------------------------------------------------------- geocoding
+class GeocodeResult(BaseModel):
+    display_name: str
+    latitude: float
+    longitude: float
+    category: Optional[str] = None
+    type: Optional[str] = None
+    importance: Optional[float] = None
+    inside_service_area: bool = True
+
+
+class ReverseGeocodeResult(BaseModel):
+    display_name: Optional[str] = None
+    road: Optional[str] = None
+    suburb: Optional[str] = None
+    city: Optional[str] = None
+    postcode: Optional[str] = None
+    latitude: float
+    longitude: float
+    inside_service_area: bool = True
+    ward_name: Optional[str] = None
+    ward_number: Optional[str] = None

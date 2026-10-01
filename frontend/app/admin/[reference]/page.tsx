@@ -21,6 +21,7 @@ import {
   titleCase,
 } from "@/lib/format";
 import type { AgentRun, ComplaintDetail } from "@/lib/types";
+import { useRequireRole } from "@/lib/auth";
 import {
   Card,
   CardHeader,
@@ -99,6 +100,7 @@ function AgentRunRow({ run }: { run: AgentRun }) {
 }
 
 export default function AdminComplaintPage() {
+  const { ready } = useRequireRole(["SUPER_ADMIN"]);
   const params = useParams<{ reference: string }>();
   const reference = decodeURIComponent(params.reference);
 
@@ -109,13 +111,14 @@ export default function AdminComplaintPage() {
   const [outcome, setOutcome] = useState<string>("GENUINE_FIXED");
 
   const load = useCallback(async () => {
+    if (!ready) return;
     try {
       setComplaint(await getComplaintDetail(reference));
       setError(null);
     } catch (err) {
       setError((err as Error).message);
     }
-  }, [reference]);
+  }, [ready, reference]);
 
   useEffect(() => {
     void load();
@@ -154,6 +157,7 @@ export default function AdminComplaintPage() {
     }
   }
 
+  if (!ready) return <Spinner label="Checking session" />;
   if (error && !complaint) {
     return (
       <div className="mx-auto max-w-2xl space-y-4">

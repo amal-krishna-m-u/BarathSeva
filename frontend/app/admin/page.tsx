@@ -27,6 +27,7 @@ import type {
   SweepResult,
   Ward,
 } from "@/lib/types";
+import { useRequireRole } from "@/lib/auth";
 import {
   Card,
   CardHeader,
@@ -64,6 +65,7 @@ const EMPTY_FILTERS: Filters = {
 };
 
 export default function CommandCenterPage() {
+  const { ready } = useRequireRole(["SUPER_ADMIN"]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [complaints, setComplaints] = useState<ComplaintListItem[]>([]);
   const [wards, setWards] = useState<Ward[]>([]);
@@ -76,6 +78,7 @@ export default function CommandCenterPage() {
   const [sweep, setSweep] = useState<SweepResult | null>(null);
 
   const load = useCallback(async () => {
+    if (!ready) return;
     try {
       const [statsData, complaintData, hotspotData] = await Promise.all([
         getStats(),
@@ -91,16 +94,17 @@ export default function CommandCenterPage() {
     } finally {
       setLoading(false);
     }
-  }, [filters]);
+  }, [ready, filters]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   useEffect(() => {
+    if (!ready) return;
     getWards().then(setWards).catch(() => undefined);
     getConfig().then(setConfig).catch(() => undefined);
-  }, []);
+  }, [ready]);
 
   async function doSweep() {
     setSweeping(true);
@@ -119,6 +123,8 @@ export default function CommandCenterPage() {
   }
 
   const activeFilters = Object.entries(filters).filter(([, v]) => v).length;
+
+  if (!ready) return <Spinner label="Checking session" />;
 
   return (
     <div className="space-y-5">

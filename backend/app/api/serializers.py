@@ -7,9 +7,19 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 
 from app.core.events import verify_chain
-from app.models import AgentRun, Complaint, ComplaintEvent, ComplaintEvidence, SocialPost
+from app.models import (
+    AgentRun,
+    Complaint,
+    ComplaintEvent,
+    ComplaintEvidence,
+    Department,
+    SocialPost,
+    User,
+)
 from app.schemas import (
     AgentRunOut,
+    DepartmentSummary,
+    UserOut,
     ComplaintDetail,
     ComplaintListItem,
     ComplaintStatusResponse,
@@ -54,6 +64,7 @@ def evidence_out(evidence: Optional[ComplaintEvidence]) -> Optional[EvidenceOut]
         exif_gps_distance_meters=evidence.exif_gps_distance_meters,
         editing_software=evidence.editing_software,
         gps_accuracy_meters=evidence.gps_accuracy_meters,
+        location_source=_enum(evidence.location_source) or "unknown",
         mock_location_flag=evidence.mock_location_flag,
         inside_serviced_ward=evidence.inside_serviced_ward,
         duplicate_of_complaint_id=evidence.duplicate_of_complaint_id,
@@ -183,4 +194,37 @@ def social_post_out(post: SocialPost) -> SocialPostOut:
         eligibility_reason=post.eligibility_reason,
         is_published=post.is_published,
         created_at=post.created_at,
+    )
+
+
+def department_summary(department: Optional[Department]) -> Optional[DepartmentSummary]:
+    if department is None:
+        return None
+    return DepartmentSummary(
+        id=department.id,
+        code=department.code,
+        name=department.name,
+        full_name=department.full_name,
+        service_label=department.service_label,
+        categories=list(department.categories or []),
+        is_mock=department.is_mock,
+    )
+
+
+def user_out(user: User) -> UserOut:
+    """Public shape of an account. Never includes password_hash."""
+    return UserOut(
+        id=user.id,
+        display_name=user.display_name,
+        email=user.email,
+        phone=user.phone,
+        role=_enum(user.role) or "CITIZEN",
+        is_verified=user.is_verified,
+        is_active=user.is_active,
+        trust_score=user.trust_score,
+        reports_confirmed=user.reports_confirmed,
+        reports_rejected=user.reports_rejected,
+        department=department_summary(user.department),
+        created_at=user.created_at,
+        last_login_at=user.last_login_at,
     )

@@ -10,22 +10,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from fastapi.testclient import TestClient
 
 from app.ai.base import InferenceRequest, Task
 from app.ai.stub import StubProvider
 from app.core.enums import AuthenticityOutcome, ComplaintStatus
 from app.core.security import issue_capture_token
-from app.main import app
 from app.models import AgentRun, Complaint, SocialPost
 from app.services.intake import IntakeRequest, submit_complaint
 from tests.conftest import INDIRANAGAR, JAYANAGAR, KORAMANGALA, MUMBAI
-
-
-@pytest.fixture
-def client(db):
-    with TestClient(app) as test_client:
-        yield test_client
 
 
 def submit(db, citizen, photo, description, location, **overrides):
@@ -364,12 +356,12 @@ class TestHttpApi:
         )
         assert response.status_code == 422
 
-    def test_admin_endpoints_serve_the_command_center(self, client, photo):
-        token = client.post(
+    def test_admin_endpoints_serve_the_command_center(self, as_super_admin, photo):
+        token = as_super_admin.post(
             "/api/capture-token",
             json={"latitude": KORAMANGALA[0], "longitude": KORAMANGALA[1]},
         ).json()
-        client.post(
+        as_super_admin.post(
             "/api/complaints",
             data={
                 "description": "Deep pothole near the junction, very dangerous",
@@ -381,25 +373,25 @@ class TestHttpApi:
             files={"photo": ("e.jpg", photo(*KORAMANGALA, seed=91), "image/jpeg")},
         )
 
-        stats = client.get("/api/admin/stats").json()
+        stats = as_super_admin.get("/api/admin/stats").json()
         assert stats["total"] >= 1
         assert stats["ai_is_real_model"] is False
 
-        listing = client.get("/api/admin/complaints").json()
+        listing = as_super_admin.get("/api/admin/complaints").json()
         assert len(listing) >= 1
 
-        detail = client.get(f"/api/admin/complaints/{listing[0]['reference']}").json()
+        detail = as_super_admin.get(f"/api/admin/complaints/{listing[0]['reference']}").json()
         assert detail["audit_chain_intact"] is True
         assert detail["evidence"]["signals"]
         assert detail["agent_runs"]
 
-        wards = client.get("/api/admin/wards").json()
+        wards = as_super_admin.get("/api/admin/wards").json()
         assert len(wards) == 18
         assert wards[0]["boundary"]["type"] == "MultiPolygon"
 
-    def test_filters_narrow_the_feed(self, client, photo):
-        token = client.post("/api/capture-token", json={}).json()
-        client.post(
+    def test_filters_narrow_the_feed(self, as_super_admin, photo):
+        token = as_super_admin.post("/api/capture-token", json={}).json()
+        as_super_admin.post(
             "/api/complaints",
             data={
                 "description": "Garbage not collected for a week near the gate",
@@ -410,17 +402,17 @@ class TestHttpApi:
             },
             files={"photo": ("e.jpg", photo(*KORAMANGALA, seed=92), "image/jpeg")},
         )
-        garbage = client.get("/api/admin/complaints?category=GARBAGE").json()
+        garbage = as_super_admin.get("/api/admin/complaints?category=GARBAGE").json()
         assert all(item["category"] == "GARBAGE" for item in garbage)
-        assert client.get("/api/admin/complaints?category=POTHOLE").json() == []
+        assert as_super_admin.get("/api/admin/complaints?category=POTHOLE").json() == []
 
-    def test_sla_sweep_endpoint_runs(self, client):
-        body = client.post("/api/admin/sla/sweep").json()
+    def test_sla_sweep_endpoint_runs(self, as_super_admin):
+        body = as_super_admin.post("/api/admin/sla/sweep").json()
         assert "checked" in body and "clusters_updated" in body
 
-    def test_resolve_endpoint_closes_the_complaint(self, client, photo):
-        token = client.post("/api/capture-token", json={}).json()
-        created = client.post(
+    def test_resolve_endpoint_closes_the_complaint(self, as_super_admin, photo):
+        token = as_super_admin.post("/api/capture-token", json={}).json()
+        created = as_super_admin.post(
             "/api/complaints",
             data={
                 "description": "Pothole near the bus stop, quite deep",
@@ -432,22 +424,22 @@ class TestHttpApi:
             files={"photo": ("e.jpg", photo(*KORAMANGALA, seed=93), "image/jpeg")},
         ).json()
 
-        resolved = client.post(
+        resolved = as_super_admin.post(
             f"/api/admin/complaints/{created['reference']}/resolve",
             json={"resolution_note": "Filled and levelled.", "field_outcome": "GENUINE_FIXED"},
         ).json()
         assert resolved["status"] == "RESOLVED"
         assert resolved["resolution_message"]
 
-        again = client.post(
+        again = as_super_admin.post(
             f"/api/admin/complaints/{created['reference']}/resolve",
             json={"resolution_note": "", "field_outcome": "GENUINE_FIXED"},
         )
         assert again.status_code == 409
 
-    def test_invalid_field_outcome_rejected(self, client, photo):
-        token = client.post("/api/capture-token", json={}).json()
-        created = client.post(
+    def test_invalid_field_outcome_rejected(self, as_super_admin, photo):
+        token = as_super_admin.post("/api/capture-token", json={}).json()
+        created = as_super_admin.post(
             "/api/complaints",
             data={
                 "description": "Pothole near the market, deep",
@@ -458,7 +450,7 @@ class TestHttpApi:
             },
             files={"photo": ("e.jpg", photo(*KORAMANGALA, seed=94), "image/jpeg")},
         ).json()
-        response = client.post(
+        response = as_super_admin.post(
             f"/api/admin/complaints/{created['reference']}/resolve",
             json={"resolution_note": "", "field_outcome": "MADE_UP"},
         )

@@ -11,6 +11,7 @@ import type {
   SocialPost,
   Ward,
 } from "@/lib/types";
+import { useRequireRole } from "@/lib/auth";
 import {
   Card,
   CardHeader,
@@ -29,6 +30,7 @@ const WINDOWS = [
 ] as const;
 
 export default function HotspotsPage() {
+  const { ready } = useRequireRole(["SUPER_ADMIN"]);
   const [windowHours, setWindowHours] = useState<number>(720);
   const [hotspots, setHotspots] = useState<Hotspot[]>([]);
   const [complaints, setComplaints] = useState<ComplaintListItem[]>([]);
@@ -38,6 +40,7 @@ export default function HotspotsPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!ready) return;
     let active = true;
     setLoading(true);
     Promise.all([
@@ -59,7 +62,7 @@ export default function HotspotsPage() {
     return () => {
       active = false;
     };
-  }, [windowHours]);
+  }, [ready, windowHours]);
 
   const totalInClusters = hotspots.reduce(
     (sum, spot) => sum + spot.complaint_count,
@@ -69,6 +72,8 @@ export default function HotspotsPage() {
     (sum, spot) => sum + spot.breached_count,
     0,
   );
+
+  if (!ready) return <Spinner label="Checking session" />;
 
   return (
     <div className="space-y-5">

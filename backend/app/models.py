@@ -32,6 +32,7 @@ from app.core.enums import (
     ComplaintStatus,
     EvidenceSource,
     EventType,
+    LocationSource,
     Priority,
     UserRole,
 )
@@ -71,27 +72,63 @@ class TimestampMixin:
 
 
 class User(Base, TimestampMixin):
-    """Citizens and administrative users.
+    """Citizens and staff accounts.
 
     ``trust_score`` is the reporter reputation described in Layer 6: it rises
     with confirmed-genuine reports and falls with rejected ones. New accounts
     start neutral and are weighted lower, never blocked.
+
+    ``department_id`` is what scopes a DEPT_ADMIN: their portal only ever
+    returns complaints routed to that one agency. It is meaningless for
+    citizens and must be NULL for them.
+
+    ``password_hash`` is nullable on purpose — anonymous reporters and
+    Telegram-identified users exist without ever setting a password.
     """
 
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     display_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    email: Mapped[Optional[str]] = mapped_column(String(254), unique=True, index=True)
     phone: Mapped[Optional[str]] = mapped_column(String(20), unique=True)
     telegram_chat_id: Mapped[Optional[str]] = mapped_column(String(64), unique=True)
     role: Mapped[UserRole] = mapped_column(enum_col(UserRole), default=UserRole.CITIZEN)
+
+    # --- authentication ---
+    password_hash: Mapped[Optional[str]] = mapped_column(String(128))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    #: Bumped on every credential change; tokens carry the value they were
+    #: issued under, so an older one stops validating. A counter rather than a
+    #: timestamp because timestamps have second resolution — two changes inside
+    #: the same second would produce the same stamp and fail to invalidate.
+    token_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    #: Audit only; never used for token validation.
+    credentials_changed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+    # --- staff scoping ---
+    department_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("departments.id"), index=True
+    )
 
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     trust_score: Mapped[float] = mapped_column(Float, default=0.5)
     reports_confirmed: Mapped[int] = mapped_column(Integer, default=0)
     reports_rejected: Mapped[int] = mapped_column(Integer, default=0)
 
-    complaints: Mapped[list["Complaint"]] = relationship(back_populates="reporter")
+    complaints: Mapped[list["Complaint"]] = relationship(
+        back_populates="reporter", foreign_keys="Complaint.reporter_id"
+    )
+    department: Mapped[Optional["Department"]] = relationship(
+        back_populates="staff", foreign_keys=[department_id]
+    )
+
+    @property
+    def can_login(self) -> bool:
+        return bool(self.password_hash) and self.is_active
 
 
 class Ward(Base):
@@ -121,11 +158,16 @@ class Department(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     full_name: Mapped[str] = mapped_column(String(300), nullable=False)
     categories: Mapped[list[str]] = mapped_column(JSON, default=list)
+    #: Plain-language service name shown in the portal ("Water", "Electricity").
+    service_label: Mapped[str] = mapped_column(String(80), default="Civic services")
     contact_email: Mapped[Optional[str]] = mapped_column(String(200))
     api_base_url: Mapped[Optional[str]] = mapped_column(String(300))
     is_mock: Mapped[bool] = mapped_column(Boolean, default=True)
 
     complaints: Mapped[list["Complaint"]] = relationship(back_populates="department")
+    staff: Mapped[list["User"]] = relationship(
+        back_populates="department", foreign_keys="User.department_id"
+    )
 
 
 class SLAPolicy(Base):
@@ -165,6 +207,9 @@ class Complaint(Base, TimestampMixin):
     latitude: Mapped[float] = mapped_column(Float, nullable=False)
     longitude: Mapped[float] = mapped_column(Float, nullable=False)
     address_text: Mapped[Optional[str]] = mapped_column(String(400))
+    location_source: Mapped[LocationSource] = mapped_column(
+        enum_col(LocationSource), default=LocationSource.UNKNOWN
+    )
     ward_id: Mapped[Optional[int]] = mapped_column(ForeignKey("wards.id"), index=True)
 
     # --- classification ---
@@ -192,6 +237,9 @@ class Complaint(Base, TimestampMixin):
     )
     external_ticket_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
     dispatched_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    #: Set when the owning department opens the ticket in their portal.
+    acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    acknowledged_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
 
     # --- sla ---
     sla_policy_id: Mapped[Optional[int]] = mapped_column(ForeignKey("sla_policies.id"))
@@ -208,7 +256,12 @@ class Complaint(Base, TimestampMixin):
     resolution_message: Mapped[Optional[str]] = mapped_column(Text)
     field_outcome: Mapped[Optional[str]] = mapped_column(String(32))
 
-    reporter: Mapped[Optional[User]] = relationship(back_populates="complaints")
+    reporter: Mapped[Optional[User]] = relationship(
+        back_populates="complaints", foreign_keys=[reporter_id]
+    )
+    acknowledged_by: Mapped[Optional[User]] = relationship(
+        foreign_keys=[acknowledged_by_id]
+    )
     ward: Mapped[Optional[Ward]] = relationship(back_populates="complaints")
     department: Mapped[Optional[Department]] = relationship(back_populates="complaints")
     sla_policy: Mapped[Optional[SLAPolicy]] = relationship()
@@ -279,6 +332,9 @@ class ComplaintEvidence(Base):
 
     # --- Layer 3: location plausibility ---
     gps_accuracy_meters: Mapped[Optional[float]] = mapped_column(Float)
+    location_source: Mapped[LocationSource] = mapped_column(
+        enum_col(LocationSource), default=LocationSource.UNKNOWN
+    )
     mock_location_flag: Mapped[bool] = mapped_column(Boolean, default=False)
     inside_serviced_ward: Mapped[Optional[bool]] = mapped_column(Boolean)
     reporter_speed_kmh: Mapped[Optional[float]] = mapped_column(Float)
