@@ -368,3 +368,39 @@ class ReverseGeocodeResult(BaseModel):
     inside_service_area: bool = True
     ward_name: Optional[str] = None
     ward_number: Optional[str] = None
+
+
+# --------------------------------------------------------------- AI providers
+class ProviderCredentialOut(BaseModel):
+    """What the admin dashboard is told about one provider.
+
+    The key itself is never included — only a mask, enough to recognise which
+    key is installed without being enough to use it.
+    """
+
+    provider: str
+    configured: bool
+    masked_key: Optional[str] = None
+    model: str
+    #: "database" | "environment" | "none" — why it is configured this way.
+    source: str
+    is_active: bool = False
+    updated_at: Optional[datetime] = None
+
+
+class ProviderCredentialUpdate(BaseModel):
+    #: Omit to leave the stored key untouched (so the model can be changed
+    #: without re-pasting the key). Send "" to clear it.
+    api_key: Optional[str] = None
+    model: Optional[str] = None
+    #: Make this the live provider for inference.
+    make_active: bool = False
+
+
+class ProviderTestResult(BaseModel):
+    provider: str
+    model: str
+    ok: bool
+    latency_ms: Optional[int] = None
+    error_kind: Optional[str] = None
+    detail: Optional[str] = None

@@ -29,6 +29,9 @@ from app.core.events import append_event
 from app.db import SessionLocal, get_db
 from app.models import Complaint, ComplaintEvent, Department, SocialPost, Ward
 from app.schemas import (
+    ProviderCredentialOut,
+    ProviderCredentialUpdate,
+    ProviderTestResult,
     ComplaintDetail,
     ComplaintListItem,
     HotspotOut,
@@ -401,3 +404,195 @@ async def stream_events(request: Request, after_id: int = 0) -> StreamingRespons
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# --------------------------------------------------------------- AI providers
+def _credential_view(db: Session, provider: str) -> ProviderCredentialOut:
+    from app.ai.credentials import active_provider, resolve
+    from app.core.crypto import mask_secret
+    from app.models import ProviderCredential
+
+    resolved = resolve(db, provider)
+    row = (
+        db.query(ProviderCredential)
+        .filter(ProviderCredential.provider == provider)
+        .one_or_none()
+    )
+    return ProviderCredentialOut(
+        provider=provider,
+        configured=bool(resolved.api_key),
+        masked_key=mask_secret(resolved.api_key),
+        model=resolved.model,
+        source=resolved.source,
+        is_active=active_provider(db) == provider,
+        updated_at=row.updated_at if row else None,
+    )
+
+
+@router.get("/ai-providers", response_model=list[ProviderCredentialOut])
+def list_ai_providers(db: Session = Depends(get_db)) -> list[ProviderCredentialOut]:
+    """Which providers are configured, from where, and which one is live."""
+    from app.ai.credentials import CONFIGURABLE_PROVIDERS
+
+    return [_credential_view(db, p) for p in CONFIGURABLE_PROVIDERS]
+
+
+@router.put("/ai-providers/{provider}", response_model=ProviderCredentialOut)
+def update_ai_provider(
+    provider: str,
+    payload: ProviderCredentialUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> ProviderCredentialOut:
+    """Set a provider's API key and model from the dashboard.
+
+    Takes effect on the next inference, not on the next restart: the provider
+    singleton is rebuilt via reset_provider_cache() before this returns.
+    """
+    from app.ai.credentials import CONFIGURABLE_PROVIDERS
+    from app.ai.factory import reset_provider_cache
+    from app.core.crypto import encrypt_secret
+    from app.models import ProviderCredential
+
+    provider = provider.strip().lower()
+    if provider not in CONFIGURABLE_PROVIDERS:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown provider {provider!r}. Expected one of {list(CONFIGURABLE_PROVIDERS)}.",
+        )
+
+    row = (
+        db.query(ProviderCredential)
+        .filter(ProviderCredential.provider == provider)
+        .one_or_none()
+    )
+    if row is None:
+        row = ProviderCredential(provider=provider)
+        db.add(row)
+
+    if payload.api_key is not None:
+        stripped = payload.api_key.strip()
+        # "" clears the stored key and falls back to the environment; omitting
+        # the field entirely leaves it alone, so the model can be changed
+        # without re-pasting a key nobody can read back.
+        row.api_key_encrypted = encrypt_secret(stripped) if stripped else None
+    if payload.model is not None and payload.model.strip():
+        row.model = payload.model.strip()
+
+    if payload.make_active:
+        db.query(ProviderCredential).filter(
+            ProviderCredential.provider != provider
+        ).update({ProviderCredential.is_active: False}, synchronize_session=False)
+        row.is_active = True
+
+    actor = getattr(request.state, "user", None)
+    row.updated_by_id = getattr(actor, "id", None)
+
+    db.commit()
+    reset_provider_cache()
+    logger.info(
+        "provider credentials updated: provider=%s key_changed=%s model=%s active=%s",
+        provider,
+        payload.api_key is not None,
+        row.model,
+        row.is_active,
+    )
+    return _credential_view(db, provider)
+
+
+@router.delete("/ai-providers/{provider}", response_model=ProviderCredentialOut)
+def clear_ai_provider(provider: str, db: Session = Depends(get_db)) -> ProviderCredentialOut:
+    """Remove the stored row so the provider falls back to the environment."""
+    from app.ai.credentials import CONFIGURABLE_PROVIDERS
+    from app.ai.factory import reset_provider_cache
+    from app.models import ProviderCredential
+
+    provider = provider.strip().lower()
+    if provider not in CONFIGURABLE_PROVIDERS:
+        raise HTTPException(status_code=404, detail=f"Unknown provider {provider!r}.")
+
+    row = (
+        db.query(ProviderCredential)
+        .filter(ProviderCredential.provider == provider)
+        .one_or_none()
+    )
+    if row is not None:
+        db.delete(row)
+        db.commit()
+        reset_provider_cache()
+    return _credential_view(db, provider)
+
+
+@router.post("/ai-providers/{provider}/test", response_model=ProviderTestResult)
+def test_ai_provider(provider: str, db: Session = Depends(get_db)) -> ProviderTestResult:
+    """Make one real inference call and report whether the key works.
+
+    A key that was pasted but never exercised is a key you find out about on a
+    citizen's complaint. This spends one trivial call to find out immediately,
+    and reports the error KIND (AUTH vs SERVER vs TIMEOUT) so a wrong key is
+    distinguishable from a busy model.
+    """
+    from app.ai.base import InferenceRequest, Task
+    from app.ai.credentials import CONFIGURABLE_PROVIDERS, resolve
+
+    provider = provider.strip().lower()
+    if provider not in CONFIGURABLE_PROVIDERS:
+        raise HTTPException(status_code=404, detail=f"Unknown provider {provider!r}.")
+
+    resolved = resolve(db, provider)
+    if not resolved.api_key:
+        return ProviderTestResult(
+            provider=provider,
+            model=resolved.model,
+            ok=False,
+            error_kind="NOT_CONFIGURED",
+            detail="No API key is configured for this provider.",
+        )
+
+    try:
+        built = _build_test_provider(provider, resolved)
+    except Exception as exc:
+        return ProviderTestResult(
+            provider=provider, model=resolved.model, ok=False,
+            error_kind="UNAVAILABLE", detail=str(exc)[:300],
+        )
+
+    probe = InferenceRequest(
+        task=Task.CLASSIFY,
+        system="Reply with JSON only.",
+        user="Reply with exactly this JSON and nothing else.",
+        schema={"ok": "boolean"},
+    )
+    result = built.infer(probe)
+    return ProviderTestResult(
+        provider=provider,
+        model=resolved.model,
+        ok=bool(result.ok),
+        latency_ms=result.latency_ms,
+        error_kind=result.error_kind,
+        detail=(str(result.error)[:300] if result.error else None),
+    )
+
+
+def _build_test_provider(provider: str, resolved):
+    """Construct a provider directly, bypassing the cached singleton.
+
+    The test must exercise the credential being examined, not whatever the
+    cache happens to hold.
+    """
+    if provider == "gemini":
+        from app.ai.gemini_provider import GeminiProvider
+
+        return GeminiProvider(resolved.api_key, resolved.model)
+    if provider == "nvidia":
+        from app.ai.nvidia_provider import NvidiaProvider
+
+        return NvidiaProvider(
+            resolved.api_key,
+            resolved.model,
+            settings.nvidia_base_url,
+            settings.ai_request_timeout_seconds,
+        )
+    from app.ai.openai_provider import OpenAIProvider
+
+    return OpenAIProvider(resolved.api_key, resolved.model)

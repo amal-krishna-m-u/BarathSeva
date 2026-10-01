@@ -451,3 +451,33 @@ class CaptureToken(Base):
     issue_latitude: Mapped[Optional[float]] = mapped_column(Float)
     issue_longitude: Mapped[Optional[float]] = mapped_column(Float)
     consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class ProviderCredential(Base, TimestampMixin):
+    """An AI provider's API key and model, set from the admin dashboard.
+
+    Exists so a deployment can be pointed at a model WITHOUT redeploying or
+    editing a .env on the host. The published aiKart container cannot ship a
+    key (a public image is a public key), and an operator should not need shell
+    access to rotate one.
+
+    The key is stored encrypted (see app/core/crypto.py) and is never returned
+    by any endpoint in full. A row here OVERRIDES the environment for that
+    provider; deleting it falls back to the environment, so an existing .env
+    deployment keeps working untouched.
+    """
+
+    __tablename__ = "provider_credentials"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    #: "openai" | "gemini" | "nvidia" — matches app.ai.factory's registry.
+    provider: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
+    #: Fernet ciphertext. Nullable so a model can be pinned without a key
+    #: (useful when the key still comes from the environment).
+    api_key_encrypted: Mapped[Optional[str]] = mapped_column(Text)
+    model: Mapped[Optional[str]] = mapped_column(String(128))
+    #: Exactly one row may be active; it selects the live provider at runtime.
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    updated_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )

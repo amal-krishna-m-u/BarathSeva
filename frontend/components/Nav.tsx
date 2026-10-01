@@ -30,6 +30,7 @@ export default function Nav() {
     links.push(
       { href: "/admin", label: "Command Center" },
       { href: "/admin/hotspots", label: "Hotspots" },
+      { href: "/admin/providers", label: "AI settings" },
     );
   }
 

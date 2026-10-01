@@ -20,6 +20,12 @@ redis==5.2.1
 # --- evidence / media ---
 Pillow==11.1.0
 
+# --- secrets at rest ---
+# Encrypts provider API keys stored via the admin dashboard. The derivation
+# key comes from BARATHSEVA_SECRET_KEY, so a database dump or a read replica
+# does not by itself yield working credentials.
+cryptography==44.0.0
+
 # --- misc ---
 httpx==0.28.1
 python-dotenv==1.0.1

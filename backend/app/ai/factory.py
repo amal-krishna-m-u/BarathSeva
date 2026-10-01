@@ -18,48 +18,79 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _dashboard_config() -> tuple[str, dict[str, object]]:
+    """Read the active provider and its credentials from the database.
+
+    Opens its own short-lived session rather than taking one, because
+    get_provider() is called from deep inside agents that are mid-transaction,
+    and a settings lookup must not join or disturb that transaction. Any
+    failure here degrades to the environment -- a credentials table that cannot
+    be read must never take down intake.
+    """
+    try:
+        from app.ai.credentials import CONFIGURABLE_PROVIDERS, active_provider, resolve
+        from app.db import SessionLocal
+
+        with SessionLocal() as db:
+            choice = (active_provider(db) or "stub").strip().lower()
+            resolved = {p: resolve(db, p) for p in CONFIGURABLE_PROVIDERS}
+            return choice, resolved
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("could not read provider credentials (%s); using settings", exc)
+        return (settings.ai_provider or "stub").strip().lower(), {}
+
+
 def _build_provider() -> AIProvider:
-    choice = (settings.ai_provider or "stub").strip().lower()
+    choice, resolved = _dashboard_config()
+
+    def _key(provider: str, fallback):
+        got = resolved.get(provider)
+        return got.api_key if got and got.api_key else fallback
+
+    def _model(provider: str, fallback):
+        got = resolved.get(provider)
+        return got.model if got and got.model else fallback
 
     if choice in {"stub", "", "none", "deterministic"}:
         return StubProvider()
 
     if choice == "openai":
-        if not settings.openai_api_key:
-            logger.warning("ai_provider=openai but BARATHSEVA_OPENAI_API_KEY is unset; using stub")
+        api_key = _key("openai", settings.openai_api_key)
+        if not api_key:
+            logger.warning("ai_provider=openai but no API key is configured; using stub")
             return StubProvider()
         try:
             from app.ai.openai_provider import OpenAIProvider
 
-            return OpenAIProvider(settings.openai_api_key, settings.openai_model)
+            return OpenAIProvider(api_key, _model("openai", settings.openai_model))
         except Exception as exc:
             logger.warning("OpenAI provider unavailable (%s); using stub", exc)
             return StubProvider()
 
     if choice == "gemini":
-        if not settings.gemini_api_key:
-            logger.warning("ai_provider=gemini but BARATHSEVA_GEMINI_API_KEY is unset; using stub")
+        api_key = _key("gemini", settings.gemini_api_key)
+        if not api_key:
+            logger.warning("ai_provider=gemini but no API key is configured; using stub")
             return StubProvider()
         try:
             from app.ai.gemini_provider import GeminiProvider
 
-            return GeminiProvider(settings.gemini_api_key, settings.gemini_model)
+            return GeminiProvider(api_key, _model("gemini", settings.gemini_model))
         except Exception as exc:
             logger.warning("Gemini provider unavailable (%s); using stub", exc)
             return StubProvider()
 
     if choice in {"nvidia", "kimi"}:
-        if not settings.nvidia_api_key:
-            logger.warning(
-                "ai_provider=%s but BARATHSEVA_NVIDIA_API_KEY is unset; using stub", choice
-            )
+        api_key = _key("nvidia", settings.nvidia_api_key)
+        if not api_key:
+            logger.warning("ai_provider=%s but no API key is configured; using stub", choice)
             return StubProvider()
         try:
             from app.ai.nvidia_provider import NvidiaProvider
 
             return NvidiaProvider(
-                settings.nvidia_api_key,
-                settings.nvidia_model,
+                api_key,
+                _model("nvidia", settings.nvidia_model),
                 settings.nvidia_base_url,
                 settings.ai_request_timeout_seconds,
             )
