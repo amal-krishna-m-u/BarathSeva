@@ -382,28 +382,10 @@ def main() -> int:
         "greeting with no civic content",
     )
 
-    step("11. Telegram channel (no capture token by design)")
-    show(
-        submit(
-            client,
-            "Street light near the park has been off for three days, the whole "
-            "stretch is dark",
-            *JAYANAGAR,
-            photo=make_photo(*JAYANAGAR, seed=504),
-            token=None,
-            source="telegram",
-            channel="telegram",
-            accuracy=25.0,
-            phone="+919000004004",
-            name="Telegram Citizen",
-        ),
-        "telegram submission, evidence weighted lower but accepted",
-    )
-
     # ------------------------------------------------------------------ SLA cycle
     header("SLA monitoring, escalation and amplification")
 
-    step("12. Time travel: backdate the first complaint past its deadline")
+    step("11. Time travel: backdate the first complaint past its deadline")
     from sqlalchemy import text as sql_text
 
     from app.db import SessionLocal
@@ -420,13 +402,13 @@ def main() -> int:
         db.commit()
     print(f"  {DIM}moved {primary_reference} 5 hours past its SLA deadline{END}")
 
-    step("13. Run the SLA sweep (the Celery beat task, triggered on demand)")
+    step("12. Run the SLA sweep (the Celery beat task, triggered on demand)")
     sweep = client.post(f"{BASE}/api/admin/sla/sweep").json()
     print(f"  checked={sweep['checked']}")
     print(f"  {FAIL}newly breached: {sweep['newly_breached']}{END}")
     print(f"  {WARN}newly escalated: {sweep['newly_escalated']}{END}")
 
-    step("14. Generated accountability content")
+    step("13. Generated accountability content")
     for post in client.get(f"{BASE}/api/admin/social-posts").json()[:4]:
         print(f"  [{post['kind']}] {post['complaint_reference']}: {post['content'][:110]}")
         print(f"    {DIM}{post['eligibility_reason'][:110]}{END}")
@@ -434,7 +416,7 @@ def main() -> int:
     # --------------------------------------------------------------- analytics
     header("Analytics and the command center")
 
-    step("15. Hotspot clusters (PostGIS ST_ClusterDBSCAN)")
+    step("14. Hotspot clusters (PostGIS ST_ClusterDBSCAN)")
     for spot in client.get(f"{BASE}/api/admin/hotspots").json():
         print(
             f"  cluster {spot['cluster_id']}: {spot['complaint_count']} complaints "
@@ -443,7 +425,7 @@ def main() -> int:
             f"open={spot['open_count']} breached={spot['breached_count']}"
         )
 
-    step("16. Platform statistics")
+    step("15. Platform statistics")
     stats = client.get(f"{BASE}/api/admin/stats").json()
     print(f"  total={stats['total']} open={stats['open_count']} "
           f"resolved={stats['resolved_count']} rejected={stats['rejected_count']}")
@@ -458,7 +440,7 @@ def main() -> int:
     # --------------------------------------------------------------- resolution
     header("Resolution")
 
-    step(f"17. Resolve {primary_reference}")
+    step(f"16. Resolve {primary_reference}")
     resolved = client.post(
         f"{BASE}/api/admin/complaints/{primary_reference}/resolve",
         json={
@@ -472,7 +454,7 @@ def main() -> int:
     print(f"  reporter trust now: {resolved['reporter_trust']}")
     print(f"\n  {BOLD}Citizen message:{END}\n  {resolved['resolution_message']}")
 
-    step(f"18. Citizen tracking view for {primary_reference}")
+    step(f"17. Citizen tracking view for {primary_reference}")
     tracked = client.get(f"{BASE}/api/complaints/{primary_reference}").json()
     for field in [
         "received", "verified", "status", "category", "priority", "ward_name",
@@ -482,12 +464,12 @@ def main() -> int:
     ]:
         print(f"    {field:22} {tracked.get(field)}")
 
-    step(f"19. Full audit trail for {primary_reference}")
+    step(f"18. Full audit trail for {primary_reference}")
     for event in tracked["events"]:
         print(f"    {event['event_type']:17} [{event['actor']:17}] "
               f"{(event['message'] or '')[:52]}")
 
-    step("20. Agent runs recorded for the primary complaint")
+    step("19. Agent runs recorded for the primary complaint")
     detail = client.get(f"{BASE}/api/admin/complaints/{primary_reference}").json()
     for run in detail["agent_runs"]:
         kind = "AI " if run["is_ai"] else "det"

@@ -455,6 +455,3 @@ class TestHttpApi:
             json={"resolution_note": "", "field_outcome": "MADE_UP"},
         )
         assert response.status_code == 422
-
-    def test_telegram_status_reports_disabled(self, client):
-        assert client.get("/api/telegram/status").json()["enabled"] is False

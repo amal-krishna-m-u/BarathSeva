@@ -12,7 +12,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import admin, auth, complaints, department, geocode, health, telegram
+from app.api import admin, auth, complaints, department, geocode, health
 from app.config import settings
 from app.core.ids import ensure_sequence
 from app.db import SessionLocal
@@ -67,7 +67,6 @@ app.include_router(geocode.router)
 app.include_router(complaints.router)
 app.include_router(department.router)
 app.include_router(admin.router)
-app.include_router(telegram.router)
 
 
 @app.on_event("startup")

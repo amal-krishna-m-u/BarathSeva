@@ -74,10 +74,6 @@ class Settings(BaseSettings):
     social_min_cluster_size: int = 4
     social_priorities: str = "P1,P2"
 
-    # --- messaging ---
-    telegram_bot_token: Optional[str] = None
-    telegram_webhook_secret: Optional[str] = None
-
     # --- authentication ---
     # Signs session JWTs. Separate from secret_key so capture-token signing and
     # session signing can be rotated independently.

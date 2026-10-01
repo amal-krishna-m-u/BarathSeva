@@ -56,7 +56,6 @@ class IntakeRequest:
     address_text: Optional[str] = None
     reporter_phone: Optional[str] = None
     reporter_name: Optional[str] = None
-    telegram_chat_id: Optional[str] = None
     #: Set when the submission carried a valid session token.
     authenticated_user: Optional[User] = None
 
@@ -82,25 +81,6 @@ def resolve_reporter(db: Session, request: IntakeRequest) -> Optional[User]:
     """
     if request.authenticated_user is not None:
         return request.authenticated_user
-
-    if request.telegram_chat_id:
-        user = (
-            db.query(User)
-            .filter_by(telegram_chat_id=request.telegram_chat_id)
-            .one_or_none()
-        )
-        if user:
-            return user
-        user = User(
-            display_name=request.reporter_name or "Telegram Citizen",
-            telegram_chat_id=request.telegram_chat_id,
-            role=UserRole.CITIZEN,
-            is_verified=True,  # Telegram established a persistent identity
-            trust_score=0.5,
-        )
-        db.add(user)
-        db.flush()
-        return user
 
     if request.reporter_phone:
         user = db.query(User).filter_by(phone=request.reporter_phone).one_or_none()

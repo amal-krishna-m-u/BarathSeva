@@ -82,8 +82,8 @@ class User(Base, TimestampMixin):
     returns complaints routed to that one agency. It is meaningless for
     citizens and must be NULL for them.
 
-    ``password_hash`` is nullable on purpose — anonymous reporters and
-    Telegram-identified users exist without ever setting a password.
+    ``password_hash`` is nullable on purpose — anonymous reporters exist
+    without ever setting a password.
     """
 
     __tablename__ = "users"
@@ -92,7 +92,6 @@ class User(Base, TimestampMixin):
     display_name: Mapped[str] = mapped_column(String(120), nullable=False)
     email: Mapped[Optional[str]] = mapped_column(String(254), unique=True, index=True)
     phone: Mapped[Optional[str]] = mapped_column(String(20), unique=True)
-    telegram_chat_id: Mapped[Optional[str]] = mapped_column(String(64), unique=True)
     role: Mapped[UserRole] = mapped_column(enum_col(UserRole), default=UserRole.CITIZEN)
 
     # --- authentication ---
