@@ -24,6 +24,9 @@ TEST_DB_URL = os.environ.setdefault(
 os.environ.setdefault("BARATHSEVA_AI_PROVIDER", "stub")
 os.environ.setdefault("BARATHSEVA_MEDIA_ROOT", str(ROOT / "media_test"))
 os.environ.setdefault("BARATHSEVA_SECRET_KEY", "test-secret")
+# Minimum bcrypt cost: these tests exercise auth logic, not key-stretching.
+os.environ.setdefault("BARATHSEVA_BCRYPT_ROUNDS", "4")
+os.environ.setdefault("BARATHSEVA_DEMO_PASSWORD", "TestPassw0rd!")
 
 import psycopg2  # noqa: E402
 import pytest  # noqa: E402
@@ -72,6 +75,27 @@ def database():
     engine.dispose()
 
 
+@pytest.fixture(autouse=True)
+def _clear_login_throttle():
+    """Reset the login throttle between tests.
+
+    The throttle is Redis-backed with a 15-minute window, so failed-login
+    counters survive the process. Without this, tests that deliberately submit
+    bad passwords would poison later runs: the counter creeps up across
+    invocations until an unrelated login starts returning 429.
+    """
+    from app.core.auth import throttle
+
+    if throttle._redis is not None:  # noqa: SLF001 - test-only cleanup
+        try:
+            for key in throttle._redis.scan_iter("barathseva:login_fail:*"):
+                throttle._redis.delete(key)
+        except Exception:
+            pass
+    throttle._memory.clear()
+    yield
+
+
 @pytest.fixture
 def db(database):
     """A clean, seeded session per test."""
@@ -110,3 +134,75 @@ KORAMANGALA = (12.9352, 77.6245)
 INDIRANAGAR = (12.9719, 77.6412)
 JAYANAGAR = (12.9250, 77.5938)
 MUMBAI = (19.0760, 72.8777)
+
+
+DEMO_PASSWORD = os.environ["BARATHSEVA_DEMO_PASSWORD"]
+
+
+def _new_client():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    return TestClient(app)
+
+
+@pytest.fixture
+def client(db):
+    """Unauthenticated HTTP client."""
+    with _new_client() as test_client:
+        yield test_client
+
+
+def _authenticated_client(email: str):
+    """Build a client carrying its own session.
+
+    Each role gets a SEPARATE TestClient instance. Sharing one and swapping the
+    Authorization header looks equivalent but is not: a test requesting two
+    role fixtures would get the same object, and the second sign-in would
+    silently overwrite the first — so a "cross-department" assertion would
+    actually be testing one department against itself.
+    """
+    test_client = _new_client()
+    response = test_client.post(
+        "/api/auth/login", json={"email": email, "password": DEMO_PASSWORD}
+    )
+    response.raise_for_status()
+    token = response.json()["access_token"]
+    test_client.headers["Authorization"] = f"Bearer {token}"
+    return test_client
+
+
+@pytest.fixture
+def as_super_admin(db):
+    """Client authenticated as the city-wide super admin."""
+    with _authenticated_client("admin@example.com") as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def as_water_admin(db):
+    """Client authenticated as the BWSSB department admin."""
+    with _authenticated_client("water@example.com") as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def as_power_admin(db):
+    """Client authenticated as the BESCOM department admin."""
+    with _authenticated_client("power@example.com") as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def as_roads_admin(db):
+    """Client authenticated as the BBMP department admin."""
+    with _authenticated_client("roads@example.com") as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def as_citizen(db):
+    """Client authenticated as a demo citizen."""
+    with _authenticated_client("citizen@example.com") as test_client:
+        yield test_client

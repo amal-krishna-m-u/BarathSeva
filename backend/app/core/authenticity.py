@@ -21,7 +21,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.core.enums import AuthenticityOutcome, EvidenceSource
+from app.core.enums import AuthenticityOutcome, EvidenceSource, LocationSource
 from app.core.exif import ImageFacts, extract_image_facts
 from app.core.geo import haversine_meters, inside_city_envelope, resolve_ward
 from app.core.hashing import dhash, hamming_distance, sha256_bytes
@@ -88,6 +88,7 @@ class EvidenceAssessment:
 
     # Layer 3
     gps_accuracy_meters: Optional[float] = None
+    location_source: LocationSource = LocationSource.UNKNOWN
     mock_location_flag: bool = False
     inside_serviced_ward: Optional[bool] = None
     reporter_speed_kmh: Optional[float] = None
@@ -208,12 +209,18 @@ def assess_evidence(
     image_mime: Optional[str] = None,
     gps_accuracy_meters: Optional[float] = None,
     mock_location: bool = False,
+    location_source: str = LocationSource.UNKNOWN.value,
     reporter: Optional[User] = None,
 ) -> EvidenceAssessment:
     """Run the deterministic evidence layers and produce a scored assessment."""
     a = EvidenceAssessment()
     a.gps_accuracy_meters = gps_accuracy_meters
     a.mock_location_flag = bool(mock_location)
+    a.location_source = (
+        LocationSource(location_source)
+        if location_source in {s.value for s in LocationSource}
+        else LocationSource.UNKNOWN
+    )
 
     # ---------------- Layer 1: server-bound capture ----------------
     token_required = channel == "web" and declared_source == EvidenceSource.CAMERA.value
@@ -447,6 +454,54 @@ def assess_evidence(
                 SEVERITY_INFO,
                 f"Point is inside ward {ward.ward_number} ({ward.ward_name}).",
             )
+
+    # How the coordinate was obtained is itself evidence. A device fix is
+    # measured; a pin dragged onto a map is asserted by the reporter and has no
+    # accuracy radius at all. Neither is rejected — a citizen reporting a
+    # pothole they saw this morning from home is legitimate — but they are not
+    # weighed the same.
+    if a.location_source is LocationSource.DEVICE_GPS:
+        a.add(
+            "location_device_gps",
+            "Location measured by device GPS",
+            SEVERITY_INFO,
+            "Coordinate came from the device's own positioning hardware.",
+        )
+    elif a.location_source is LocationSource.MAP_PICKED:
+        a.add(
+            "location_map_picked",
+            "Location placed manually on the map",
+            SEVERITY_WARN,
+            "The reporter dragged a pin rather than supplying a measured GPS "
+            "fix, so the coordinate is asserted rather than observed.",
+            delta=-0.12,
+        )
+    elif a.location_source is LocationSource.GEOCODED:
+        a.add(
+            "location_geocoded",
+            "Location derived from an address search",
+            SEVERITY_WARN,
+            "Coordinate came from geocoding a place name, which resolves to a "
+            "street or area rather than the precise spot.",
+            delta=-0.15,
+        )
+
+    # A manually-placed pin that the photo's own GPS agrees with is far
+    # stronger than either signal alone: the reporter could not have known
+    # where to put the pin without having been there.
+    if (
+        a.location_source in {LocationSource.MAP_PICKED, LocationSource.GEOCODED}
+        and a.exif_gps_distance_meters is not None
+        and a.exif_gps_distance_meters <= settings.exif_gps_tolerance_meters
+    ):
+        a.add(
+            "manual_pin_corroborated",
+            "Manual pin matches the photo's GPS",
+            SEVERITY_INFO,
+            f"The placed pin is {a.exif_gps_distance_meters:.0f} m from the "
+            "photo's embedded GPS, which independently corroborates it.",
+            delta=0.12,
+        )
 
     if gps_accuracy_meters is not None:
         if gps_accuracy_meters > settings.gps_accuracy_max_meters:

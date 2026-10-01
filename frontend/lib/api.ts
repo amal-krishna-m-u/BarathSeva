@@ -1,5 +1,6 @@
 /** Thin API client. Every call goes through the FastAPI trust boundary. */
 
+import { getToken } from "./token";
 import type {
   ComplaintDetail,
   ComplaintListItem,
@@ -7,6 +8,12 @@ import type {
   Hotspot,
   PublicConfig,
   SocialPost,
+  AuthUser,
+  DepartmentStats,
+  DepartmentSummary,
+  GeocodeResult,
+  ReverseGeocodeResult,
+  SessionResponse,
   Stats,
   SubmitResponse,
   SweepResult,
@@ -16,7 +23,7 @@ import type {
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
-const ADMIN_KEY = process.env.NEXT_PUBLIC_ADMIN_KEY ?? "";
+
 
 export function mediaUrl(path: string | null): string | null {
   if (!path) return null;
@@ -35,7 +42,8 @@ class ApiError extends Error {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
-  if (ADMIN_KEY) headers.set("X-Admin-Key", ADMIN_KEY);
+  const token = getToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
   if (init?.body && typeof init.body === "string") {
     headers.set("Content-Type", "application/json");
   }
@@ -155,3 +163,105 @@ export const reviewComplaint = (
   );
 
 export { ApiError };
+
+
+// ------------------------------------------------------------------- auth
+export const register = (body: {
+  email: string;
+  password: string;
+  display_name: string;
+  phone?: string;
+}) =>
+  request<SessionResponse>("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const login = (body: { email: string; password: string }) =>
+  request<SessionResponse>("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const fetchMe = () => request<AuthUser>("/api/auth/me");
+
+export const changePassword = (body: {
+  current_password: string;
+  new_password: string;
+}) =>
+  request<SessionResponse>("/api/auth/change-password", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const myComplaints = () =>
+  request<ComplaintListItem[]>("/api/me/complaints");
+
+// ------------------------------------------------------------- department
+export const getMyDepartment = () =>
+  request<DepartmentSummary>("/api/department/me");
+
+export const getDepartmentStats = () =>
+  request<DepartmentStats>("/api/department/stats");
+
+export function listDepartmentComplaints(
+  params: Record<string, string | undefined>,
+) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value) query.set(key, value);
+  }
+  const suffix = query.toString() ? `?${query}` : "";
+  return request<ComplaintListItem[]>(`/api/department/complaints${suffix}`);
+}
+
+export const getDepartmentComplaint = (reference: string) =>
+  request<ComplaintDetail>(
+    `/api/department/complaints/${encodeURIComponent(reference)}`,
+  );
+
+export const acknowledgeComplaint = (reference: string, note: string) =>
+  request<ComplaintDetail>(
+    `/api/department/complaints/${encodeURIComponent(reference)}/acknowledge`,
+    { method: "POST", body: JSON.stringify({ note }) },
+  );
+
+export const departmentResolve = (
+  reference: string,
+  body: { resolution_note: string; field_outcome: string },
+) =>
+  request<ComplaintDetail>(
+    `/api/department/complaints/${encodeURIComponent(reference)}/resolve`,
+    { method: "POST", body: JSON.stringify(body) },
+  );
+
+export const reassignComplaint = (
+  reference: string,
+  body: { target_department_code: string; reason: string },
+) =>
+  request<ComplaintDetail>(
+    `/api/department/complaints/${encodeURIComponent(reference)}/reassign`,
+    { method: "POST", body: JSON.stringify(body) },
+  );
+
+// --------------------------------------------------------------- geocoding
+export const geocodeSearch = (q: string) =>
+  request<GeocodeResult[]>(`/api/geocode/search?q=${encodeURIComponent(q)}`);
+
+export const geocodeReverse = (lat: number, lon: number) =>
+  request<ReverseGeocodeResult>(
+    `/api/geocode/reverse?lat=${lat}&lon=${lon}`,
+  );
+
+export const geocodeDefaults = () =>
+  request<{
+    center: { latitude: number; longitude: number };
+    bounds: {
+      min_latitude: number;
+      min_longitude: number;
+      max_latitude: number;
+      max_longitude: number;
+    };
+    city: string;
+    attribution: string;
+  }>("/api/geocode/defaults");

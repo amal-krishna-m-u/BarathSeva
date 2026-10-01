@@ -13,12 +13,15 @@ from app.api import serializers
 from app.config import settings
 from app.core import media
 from app.core.security import issue_capture_token
-from app.core.enums import ComplaintStatus
+from app.core.auth import get_current_user, get_current_user_optional
+from app.core.enums import ComplaintStatus, LocationSource
 from app.db import get_db
 from app.models import Complaint, User
+from sqlalchemy.orm import joinedload
 from app.schemas import (
     CaptureTokenRequest,
     CaptureTokenResponse,
+    ComplaintListItem,
     ComplaintStatusResponse,
     ComplaintSubmitResponse,
     EventOut,
@@ -35,15 +38,17 @@ ALLOWED_MIMES = {"image/jpeg", "image/jpg", "image/png", "image/webp", "image/he
 
 @router.post("/capture-token", response_model=CaptureTokenResponse)
 def create_capture_token(
-    payload: CaptureTokenRequest, db: Session = Depends(get_db)
+    payload: CaptureTokenRequest,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ) -> CaptureTokenResponse:
     """Issue a short-lived, single-use capture token (evidence Layer 1).
 
     The client must call this *before* opening the camera. The token is what
     binds the eventual upload to a server-known moment and GPS fix.
     """
-    user: Optional[User] = None
-    if payload.phone:
+    user: Optional[User] = current_user
+    if user is None and payload.phone:
         user = db.query(User).filter_by(phone=payload.phone).one_or_none()
 
     issued = issue_capture_token(
@@ -73,11 +78,13 @@ async def create_complaint(
     capture_token: Optional[str] = Form(None),
     gps_accuracy_meters: Optional[float] = Form(None),
     mock_location: bool = Form(False),
+    location_source: str = Form(LocationSource.UNKNOWN.value),
     address_text: Optional[str] = Form(None),
     reporter_phone: Optional[str] = Form(None),
     reporter_name: Optional[str] = Form(None),
     photo: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ) -> ComplaintSubmitResponse:
     """Submit a complaint. One message is enough to start the whole workflow.
 
@@ -118,9 +125,11 @@ async def create_complaint(
             image_mime=image_mime,
             gps_accuracy_meters=gps_accuracy_meters,
             mock_location=mock_location,
+            location_source=location_source,
             address_text=address_text,
             reporter_phone=reporter_phone,
             reporter_name=reporter_name,
+            authenticated_user=current_user,
         ),
     )
 
@@ -210,3 +219,29 @@ def get_media(path: str):
     if root not in resolved.parents or not resolved.is_file():
         raise HTTPException(status_code=404, detail="Media not found.")
     return FileResponse(resolved)
+
+
+@router.get("/me/complaints", response_model=list[ComplaintListItem])
+def my_complaints(
+    limit: int = 100,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[ComplaintListItem]:
+    """Every complaint this citizen has filed.
+
+    Scoped by the session's user id, never by a query parameter — otherwise
+    anyone could read anyone else's reports by changing a number.
+    """
+    rows = (
+        db.query(Complaint)
+        .options(
+            joinedload(Complaint.ward),
+            joinedload(Complaint.department),
+            joinedload(Complaint.evidence),
+        )
+        .filter(Complaint.reporter_id == user.id)
+        .order_by(Complaint.created_at.desc())
+        .limit(min(limit, 500))
+        .all()
+    )
+    return [serializers.list_item(c) for c in rows]

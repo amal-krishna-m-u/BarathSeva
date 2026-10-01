@@ -24,7 +24,13 @@ from sqlalchemy.orm import Session
 
 from app.core import media
 from app.core.authenticity import EvidenceAssessment, assess_evidence
-from app.core.enums import AuthenticityOutcome, ComplaintStatus, EventType, UserRole
+from app.core.enums import (
+    AuthenticityOutcome,
+    ComplaintStatus,
+    EventType,
+    LocationSource,
+    UserRole,
+)
 from app.core.events import append_event
 from app.core.ids import next_complaint_reference
 from app.core.security import consume_capture_token
@@ -46,10 +52,13 @@ class IntakeRequest:
     image_mime: Optional[str] = None
     gps_accuracy_meters: Optional[float] = None
     mock_location: bool = False
+    location_source: str = LocationSource.UNKNOWN.value
     address_text: Optional[str] = None
     reporter_phone: Optional[str] = None
     reporter_name: Optional[str] = None
     telegram_chat_id: Optional[str] = None
+    #: Set when the submission carried a valid session token.
+    authenticated_user: Optional[User] = None
 
 
 @dataclass
@@ -66,7 +75,14 @@ class IntakeResult:
 
 
 def resolve_reporter(db: Session, request: IntakeRequest) -> Optional[User]:
-    """Find or create the reporting citizen. Anonymous reports are allowed."""
+    """Find or create the reporting citizen. Anonymous reports are allowed.
+
+    A signed-in citizen always wins over form fields: the session is
+    authenticated, a typed phone number is not.
+    """
+    if request.authenticated_user is not None:
+        return request.authenticated_user
+
     if request.telegram_chat_id:
         user = (
             db.query(User)
@@ -119,6 +135,7 @@ def submit_complaint(db: Session, request: IntakeRequest) -> IntakeResult:
         image_mime=request.image_mime,
         gps_accuracy_meters=request.gps_accuracy_meters,
         mock_location=request.mock_location,
+        location_source=request.location_source,
         reporter=reporter,
     )
 
@@ -143,6 +160,7 @@ def submit_complaint(db: Session, request: IntakeRequest) -> IntakeResult:
         latitude=request.latitude,
         longitude=request.longitude,
         address_text=request.address_text,
+        location_source=assessment.location_source,
     )
     db.add(complaint)
     db.flush()
@@ -168,6 +186,7 @@ def submit_complaint(db: Session, request: IntakeRequest) -> IntakeResult:
         exif_gps_distance_meters=assessment.exif_gps_distance_meters,
         editing_software=assessment.editing_software,
         gps_accuracy_meters=assessment.gps_accuracy_meters,
+        location_source=assessment.location_source,
         mock_location_flag=assessment.mock_location_flag,
         inside_serviced_ward=assessment.inside_serviced_ward,
         reporter_speed_kmh=assessment.reporter_speed_kmh,

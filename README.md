@@ -10,7 +10,7 @@
 ![PostGIS](https://img.shields.io/badge/PostGIS-3.4-336791)
 ![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)
 ![Celery](https://img.shields.io/badge/Celery-5.4-37814A?logo=celery&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-86%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-127%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 BarathSeva AI is an AI-powered civic complaint intelligence platform that lets citizens report civic problems — potholes, water leaks, drainage issues, streetlight failures, power outages — using nothing more than a natural-language message, a photo, and a location.
@@ -21,7 +21,7 @@ The prototype targets **Bengaluru** first and is architected so it can later sca
 
 > **One citizen message should be enough to start the complete civic complaint workflow.**
 
-> **Repository status.** The prototype is implemented and runs end to end: FastAPI + LangGraph backend, Next.js command center, PostgreSQL/PostGIS, Redis/Celery, and the evidence authenticity engine, verified by 86 passing tests against a real PostGIS database. Government connectivity is **mock BBMP / BWSSB / BESCOM endpoints** — there are no real municipal integrations. The default AI provider is a **deterministic rule engine**, so the platform runs with no API keys; set `BARATHSEVA_AI_PROVIDER` to use a real model. See [Running the prototype](#running-the-prototype).
+> **Repository status.** The prototype is implemented and runs end to end: FastAPI + LangGraph backend, Next.js command center, PostgreSQL/PostGIS, Redis/Celery, and the evidence authenticity engine, role-based authentication with department-scoped portals, verified by 127 passing tests against a real PostGIS database. Government connectivity is **mock BBMP / BWSSB / BESCOM endpoints** — there are no real municipal integrations. The default AI provider is a **deterministic rule engine**, so the platform runs with no API keys; set `BARATHSEVA_AI_PROVIDER` to use a real model. See [Running the prototype](#running-the-prototype).
 
 ---
 
@@ -396,7 +396,119 @@ Reporter reputation maturity, neighbour confirmation, velocity analysis, and C2P
 
 ---
 
-## 6. Technology Stack
+## 6. Accounts, Roles and Department Portals
+
+A civic platform has three different audiences with three different needs, and
+conflating them is how data leaks. BarathSeva AI separates them at the API, not
+just in the UI.
+
+### Roles
+
+| Role | Sees | Can do |
+| ---- | ---- | ------ |
+| `CITIZEN` | Only their own reports | File complaints, track them, read their own audit trail |
+| `DEPT_ADMIN` | Only complaints routed to **their** department | Acknowledge, resolve, reassign misrouted tickets |
+| `SUPER_ADMIN` | The whole city | Everything above, plus hotspot analytics, SLA sweeps and the city-wide command center |
+
+Self-registration creates citizens **only**. A `role` or `department_id` in a
+registration payload is ignored, not honoured — letting a signup choose its own
+role is how privilege escalation happens. Staff accounts are provisioned by
+seeding or by a super admin.
+
+### The three service departments
+
+Every complaint category maps to exactly one agency, so routing is total and
+deterministic:
+
+| Department | Service | Owns |
+| ---------- | ------- | ---- |
+| **BWSSB** | Water & Sewerage | water leak, burst pipeline, sewage |
+| **BESCOM** | Electricity | power outage |
+| **BBMP** | Roads & Public Works | pothole, road damage, drainage, garbage, streetlight, other |
+
+Each department admin signs in to a desk showing only their own inbox —
+breached tickets first, then nearest deadline. They can acknowledge a ticket
+(moving it to `IN_PROGRESS`), resolve it with a field outcome, or **reassign**
+it when the routing table got a specific case wrong. Reassignment transfers
+ownership and is recorded in the audit trail with who moved it and why.
+
+> These three departments are **demo stand-ins**. The agency names are real
+> Bengaluru bodies, but the endpoints behind them are mocks and the staff
+> accounts are seeded fixtures. No real municipal system is contacted.
+
+### How scoping is enforced
+
+Department filtering is applied **server-side, before the lookup**. A
+`DEPT_ADMIN` cannot widen it with a query parameter, and requesting another
+agency's complaint by reference returns `404` rather than `403` — a department
+should not be able to probe for the existence of other agencies' tickets.
+
+A `DEPT_ADMIN` with no department attached is rejected outright, because such
+an account would otherwise fall through the scoping filter and see everything.
+
+### Session handling
+
+Sessions are stateless JWTs signed with HMAC-SHA256. Two details worth naming:
+
+- **Passwords are SHA-256 pre-hashed before bcrypt.** bcrypt silently
+  truncates at 72 bytes, so without this a long passphrase would be validated
+  on only its first 72 bytes, and two long passphrases sharing a prefix would
+  both unlock the account.
+- **Tokens carry a `token_version` counter.** Changing a password bumps it,
+  invalidating every outstanding token. A counter rather than a timestamp
+  because timestamps have second resolution — two changes inside the same
+  second would produce the same stamp and fail to invalidate.
+
+Failed logins are throttled per account-and-address, and every failure mode
+returns one generic message so the endpoint cannot be used to enumerate which
+addresses are registered.
+
+**Known limits, stated rather than hidden.** The session token is kept in
+`localStorage`, so an XSS bug would become token theft; production should use
+an httpOnly `SameSite` cookie with CSRF protection. Stateless JWTs also cannot
+be revoked individually without a denylist this prototype does not keep —
+changing a password invalidates them, but signing out only discards the token
+client-side. The SSE live feed is not covered by the bearer check, because
+`EventSource` cannot send headers.
+
+---
+
+## 7. Locating a Complaint
+
+Ward and department routing both derive from one coordinate, so getting it
+right matters more than getting it automatically.
+
+The app tries device geolocation first, because a measured fix is the
+strongest location evidence. But geolocation fails constantly in practice —
+permission denied, indoors, a desktop with no GPS, or the citizen is reporting
+something they saw earlier from somewhere else. Refusing those reports would
+lose real civic issues, so the fallback is first-class:
+
+1. **Use my location** — device GPS, recorded with its accuracy radius.
+2. **Search for a place** — address lookup via OpenStreetMap Nominatim.
+3. **Drop the pin** — tap anywhere on the map to place it exactly.
+
+What changes between these is the **evidence weight, not the acceptance**. The
+method is recorded as `location_source` and scored accordingly: a device fix is
+neutral, a hand-placed pin loses 0.12, a geocoded address loses 0.15 — because
+the first is measured and the others are asserted by the reporter.
+
+One interaction is worth calling out: if a manually-placed pin lands within
+tolerance of the photo's own embedded GPS, the score goes *back up*. The
+reporter could not have known where to put the pin without having been there,
+so two weak signals corroborate into a strong one.
+
+Geocoding is proxied through the backend rather than called from the browser,
+for three reasons: Nominatim's usage policy requires an identifying User-Agent
+that a browser cannot set, it permits roughly one request per second (one
+server-side limiter can honour that, N browser tabs cannot), and proxying makes
+results cacheable. Ward assignment always comes from the platform's own PostGIS
+geometry, never from Nominatim — so a third-party outage degrades the address
+label, not the routing.
+
+---
+
+## 8. Technology Stack
 
 ### Frontend
 - Next.js
@@ -407,6 +519,11 @@ Reporter reputation maturity, neighbour confirmation, velocity analysis, and C2P
 - FastAPI
 - Python
 - Pydantic
+
+### Authentication
+- bcrypt (SHA-256 pre-hashed) for password storage
+- PyJWT for stateless sessions
+- Role-based access control: citizen / department admin / super admin
 
 ### AI Orchestration
 - LangGraph
@@ -430,8 +547,11 @@ Reporter reputation maturity, neighbour confirmation, velocity analysis, and C2P
 ### Messaging
 - Telegram Bot API
 
-### Maps
-- Mapbox or Google Maps
+### Maps & Geocoding
+- Leaflet with OpenStreetMap tiles (no API key required)
+- OpenStreetMap Nominatim for address search and reverse geocoding, proxied
+  and cached server-side
+- Mapbox or Google Maps drop in behind the same component props
 
 ### Storage
 - Supabase Storage
@@ -445,7 +565,7 @@ Government connectivity in the prototype is served entirely by mock APIs. Real m
 
 ---
 
-## 7. End-to-End Complaint Lifecycle
+## 9. End-to-End Complaint Lifecycle
 
 ```text
 Citizen:
@@ -517,7 +637,7 @@ What the walkthrough shows is the scope of what a single sentence plus a photo s
 
 ---
 
-## 8. Data Architecture
+## 10. Data Architecture
 
 ```text
 users
@@ -533,12 +653,12 @@ social_posts
 
 | Entity | Purpose |
 | ------ | ------- |
-| `users` | Citizens and administrative users — identity, verification state, contact channel (including Telegram), role, and reporter trust score. |
+| `users` | Citizens and staff — identity, email and password hash, role, the department a staff account is scoped to, a `token_version` counter for session invalidation, verification state, contact channel (including Telegram), and reporter trust score. |
 | `complaints` | The primary complaint record: description, media reference, location, category, priority, ward, assigned department, external ticket reference, status, and SLA deadline. |
 | `complaint_evidence` | Per-submission evidence record: capture token reference and source (camera or gallery), `server_received_at`, extracted EXIF payload, GPS accuracy and mock-location flag, SHA-256 and perceptual hashes, individual authenticity signals, and the resulting score. |
 | `complaint_events` | Append-only history of everything that happened to a complaint — created, verified, classified, routed, escalated, resolved — with actor and timestamp. |
 | `agent_runs` | One row per agent/node execution: input state, output, confidence, status, latency, and model or rule version used. |
-| `departments` | Municipal agencies and the categories they own, forming the routing table the dispatcher resolves against. |
+| `departments` | The three service agencies, their plain-language service label, and the categories they own — the routing table the dispatcher resolves against, and the scope a department admin is confined to. |
 | `wards` | Ward and zone records with geographic boundary geometry. |
 | `sla_policies` | Resolution deadlines and escalation thresholds per category and priority. |
 | `social_posts` | Public accountability content generated for eligible complaints, with its publication state. |
@@ -555,7 +675,7 @@ Key properties of this model:
 
 ---
 
-## 9. Design Principles
+## 11. Design Principles
 
 ### AI for reasoning
 
@@ -601,7 +721,7 @@ The architecture supports a future manual-review path for low-confidence or ambi
 
 ---
 
-## 10. Prototype vs Production
+## 12. Prototype vs Production
 
 ### Prototype
 
@@ -624,7 +744,10 @@ The prototype's goal is to demonstrate the **complete autonomous complaint lifec
 Future enhancements may include:
 
 - real municipal integrations
-- stronger authentication and authorization
+- httpOnly cookie sessions with CSRF protection, and a token denylist for
+  immediate revocation
+- per-officer identity (SSO), granular permissions and an access audit log
+- email/SMS verification and password reset flows
 - production queues
 - advanced observability
 - model evaluation
@@ -686,12 +809,39 @@ Then open:
 
 | URL | What it is |
 | --- | ---------- |
-| `http://localhost:3000` | Citizen reporting flow (in-app camera capture) |
-| `http://localhost:3000/track` | Complaint tracking by reference |
-| `http://localhost:3000/admin` | Admin command center — map, filters, live feed |
+| `http://localhost:3000` | Citizen reporting — camera capture + map location picker |
+| `http://localhost:3000/login` | Sign in or register; each role lands on its own dashboard |
+| `http://localhost:3000/track` | Complaint tracking by reference (no account needed) |
+| `http://localhost:3000/my-reports` | A citizen's own reports and trust score |
+| `http://localhost:3000/department` | Department desk, scoped to one agency |
+| `http://localhost:3000/admin` | City-wide command center (super admin) |
 | `http://localhost:3000/admin/hotspots` | Hotspot analytics and generated content |
 | `http://localhost:8000/docs` | Interactive OpenAPI documentation |
 | `http://localhost:8000/health` | What is actually wired up right now |
+
+### Demo accounts
+
+Seeded automatically, and **skipped entirely when
+`BARATHSEVA_ENVIRONMENT=production`** so a real deployment can never inherit a
+published credential. The shared password is `BARATHSEVA_DEMO_PASSWORD` in
+[`backend/.env.example`](backend/.env.example); the account list lives in
+`backend/app/core/city.py`.
+
+| Account | Role | Lands on |
+| ------- | ---- | -------- |
+| `admin@example.com` | Super admin | City-wide command center |
+| `water@example.com` | BWSSB — Water & Sewerage | Department desk |
+| `power@example.com` | BESCOM — Electricity | Department desk |
+| `roads@example.com` | BBMP — Roads & Public Works | Department desk |
+| `citizen@example.com` | Citizen | My reports |
+
+The login page lists these and fills the email when you click one. Addresses
+use `example.com` (RFC 2606), which is reserved for documentation and cannot
+deliver to anyone.
+
+**Try the scoping:** file a water complaint and an electricity complaint as a
+citizen, then sign in as `water@example.com`. Only the water ticket is there —
+and opening the electricity one by reference returns a 404, not a 403.
 
 `/health` is deliberately honest: it reports the active AI provider, whether it
 is a real model, whether Telegram is configured, and that the government APIs
@@ -727,11 +877,15 @@ command center) so the lifecycle can be demonstrated without a worker running.
 ### Tests
 
 ```bash
-make test      # 86 tests
+make test      # 127 tests
 ```
 
 The suite runs against a real PostGIS database (`barathseva_test`, created
-automatically), not a mock. The geospatial logic *is* the behaviour under
+automatically), not a mock. Alongside the pipeline and evidence tests, it
+asserts the security properties directly: that self-registration cannot grant
+a role, that a password change invalidates outstanding tokens, that long
+passwords are not silently truncated, and that a department admin can neither
+read nor write another agency's complaints. The geospatial logic *is* the behaviour under
 test — ward containment, radius search and DBSCAN clustering have no
 meaningful in-memory substitute, so a fake would only prove the fake works.
 
@@ -773,6 +927,7 @@ backend/
     seed.py              Idempotent wards / departments / SLA policies
     core/
       authenticity.py    Evidence engine: Layers 1-4 and 6, plus scoring
+      auth.py            Password hashing, JWT sessions, role dependencies
       security.py        HMAC capture tokens (Layer 1)
       exif.py            EXIF and file forensics (Layer 2)
       geo.py             PostGIS containment, radius search, DBSCAN hotspots
@@ -786,6 +941,12 @@ backend/
       stub.py            Deterministic provider — runs with no API key
       openai_provider.py / gemini_provider.py / factory.py
       prompts.py         Prompt construction for model-backed providers
+    api/
+      auth.py            Register, login, me, change password
+      department.py      Department-scoped inbox and actions
+      geocode.py         Nominatim proxy with caching and rate limiting
+      admin.py           City-wide endpoints (super admin only)
+      complaints.py      Citizen intake, tracking, my-reports
     agents/              verifier, classifier, geocluster, dispatcher,
                          sla_monitor, social, resolution
     workflow/graph.py    LangGraph orchestration with human-review edges
@@ -796,12 +957,28 @@ backend/
     init_db.py           Schema + seed
     demo_lifecycle.py    End-to-end demonstration over the real API
     make_test_photo.py   Synthetic JPEGs with real EXIF for testing
-  tests/                 86 tests against real PostGIS
+  tests/                 127 tests against real PostGIS
+    test_evidence.py     Capture tokens, forensics, scoring bands
+    test_geo_sla_routing.py  PostGIS, SLA arithmetic, routing, audit chain
+    test_pipeline.py     Full LangGraph traversal and the HTTP API
+    test_auth.py         Roles, sessions, and department scoping
 
 frontend/
-  app/                   Citizen report, tracking, command center, hotspots
-  components/            Report form, evidence panel, map, live feed
-  lib/                   API client, types, formatting
+  app/
+    page.tsx             Citizen reporting flow
+    login/               Sign in and citizen registration
+    my-reports/          A citizen's own reports
+    track/               Public complaint tracking
+    department/          Department desk and ticket detail
+    admin/               City-wide command center and hotspots
+  components/
+    ReportForm.tsx       Camera capture + submission
+    LocationPicker.tsx   GPS, address search, or drop-a-pin
+    EvidencePanel.tsx    Authenticity signal set
+    ComplaintMap.tsx     Leaflet map over OSM
+    LiveFeed.tsx         SSE audit stream
+    Nav.tsx              Role-aware navigation
+  lib/                   API client, auth context, types, formatting
 ```
 
 ---

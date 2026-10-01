@@ -78,6 +78,31 @@ class Settings(BaseSettings):
     telegram_bot_token: Optional[str] = None
     telegram_webhook_secret: Optional[str] = None
 
+    # --- authentication ---
+    # Signs session JWTs. Separate from secret_key so capture-token signing and
+    # session signing can be rotated independently.
+    jwt_secret: Optional[str] = None
+    jwt_algorithm: str = "HS256"
+    access_token_ttl_minutes: int = 720  # 12 hours
+    password_min_length: int = 8
+    #: bcrypt work factor. 12 is the production default; the test suite drops
+    #: it to 4, because hashing five seeded accounts per test at cost 12 added
+    #: two minutes to the run for no additional coverage.
+    bcrypt_rounds: int = 12
+    login_max_attempts: int = 8
+    login_attempt_window_seconds: int = 900
+    allow_citizen_self_registration: bool = True
+
+    # --- geocoding (OpenStreetMap Nominatim, proxied through the backend) ---
+    # Nominatim's usage policy requires an identifying User-Agent and at most
+    # one request per second. Proxying lets us honour both and cache results,
+    # which a browser calling Nominatim directly cannot do.
+    nominatim_base_url: str = "https://nominatim.openstreetmap.org"
+    nominatim_user_agent: str = "BarathSeva-AI-Prototype/0.1 (civic complaints)"
+    nominatim_timeout_seconds: float = 8.0
+    geocode_cache_ttl_seconds: int = 86400
+    geocode_rate_limit_per_minute: int = 30
+
     # --- admin access ---
     # The prototype ships a shared-key gate so the mechanism exists and the
     # frontend wires through it. It is NOT real authorization: production needs
@@ -85,6 +110,11 @@ class Settings(BaseSettings):
     # enforce, which any non-local deployment must do.
     admin_api_key: str = "dev-admin-key"
     require_admin_key: bool = False
+
+    @property
+    def resolved_jwt_secret(self) -> str:
+        """Fall back to secret_key so the prototype runs without extra config."""
+        return self.jwt_secret or self.secret_key
 
     @property
     def cors_origin_list(self) -> list[str]:

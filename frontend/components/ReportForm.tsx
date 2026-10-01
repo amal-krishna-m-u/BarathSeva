@@ -20,9 +20,10 @@ import {
 import { deviceId } from "@/lib/format";
 import type { PublicConfig, SubmitResponse } from "@/lib/types";
 import { SignalList, ScoreBar } from "./EvidencePanel";
+import LocationPicker, { type PickedLocation } from "./LocationPicker";
 import { Card, CardHeader, ErrorNote, Field, OutcomePill, Pill } from "./ui";
+import { useAuth } from "@/lib/auth";
 
-type Fix = { latitude: number; longitude: number; accuracy: number };
 type Shot = { blob: Blob; url: string; source: "camera" | "gallery" };
 
 const EXAMPLES = [
@@ -33,14 +34,13 @@ const EXAMPLES = [
 ];
 
 export default function ReportForm() {
+  const { user } = useAuth();
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [description, setDescription] = useState("");
   const [phone, setPhone] = useState("");
   const [name, setName] = useState("");
 
-  const [fix, setFix] = useState<Fix | null>(null);
-  const [locating, setLocating] = useState(false);
-  const [locationError, setLocationError] = useState<string | null>(null);
+  const [location, setLocation] = useState<PickedLocation | null>(null);
 
   const [shot, setShot] = useState<Shot | null>(null);
   const [cameraOn, setCameraOn] = useState(false);
@@ -65,32 +65,6 @@ export default function ReportForm() {
   }, []);
 
   useEffect(() => stopCamera, [stopCamera]);
-
-  function locate() {
-    if (!navigator.geolocation) {
-      setLocationError("This browser does not expose geolocation.");
-      return;
-    }
-    setLocating(true);
-    setLocationError(null);
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        setFix({
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          accuracy: position.coords.accuracy,
-        });
-        setLocating(false);
-      },
-      (err) => {
-        setLocationError(
-          `${err.message}. Location is required — ward and department routing both derive from it.`,
-        );
-        setLocating(false);
-      },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
-    );
-  }
 
   async function startCamera() {
     setCameraError(null);
@@ -158,8 +132,12 @@ export default function ReportForm() {
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!fix) {
-      setError("Share your location first.");
+    if (!location) {
+      setError("Set the location first — ward and department routing both derive from it.");
+      return;
+    }
+    if (!location.insideServiceArea) {
+      setError("That point is outside the serviced city. Move the pin inside Bengaluru.");
       return;
     }
     if (description.trim().length < 5) {
@@ -173,21 +151,27 @@ export default function ReportForm() {
       // Layer 1: bind this capture to a server-issued, single-use token.
       const token = await requestCaptureToken({
         device_id: deviceId(),
-        latitude: fix.latitude,
-        longitude: fix.longitude,
+        latitude: location.latitude,
+        longitude: location.longitude,
         phone: phone.trim() || undefined,
       });
 
       const form = new FormData();
       form.set("description", description.trim());
-      form.set("latitude", String(fix.latitude));
-      form.set("longitude", String(fix.longitude));
+      form.set("latitude", String(location.latitude));
+      form.set("longitude", String(location.longitude));
       form.set("channel", "web");
       form.set("declared_source", shot?.source ?? "camera");
-      form.set("gps_accuracy_meters", String(Math.round(fix.accuracy)));
+      form.set("location_source", location.source);
       form.set("mock_location", "false");
+      if (location.accuracy != null) {
+        form.set("gps_accuracy_meters", String(Math.round(location.accuracy)));
+      }
+      if (location.address) form.set("address_text", location.address);
       if (shot?.source === "camera") form.set("capture_token", token.token);
-      if (phone.trim()) {
+      // A signed-in citizen is attributed from their session; these fields
+      // only matter for anonymous reports.
+      if (!user && phone.trim()) {
         form.set("reporter_phone", phone.trim());
         form.set("reporter_name", name.trim() || "Citizen");
       }
@@ -205,7 +189,8 @@ export default function ReportForm() {
     return <ResultView result={result} onReset={reset} />;
   }
 
-  const ready = Boolean(fix) && description.trim().length >= 5;
+  const ready =
+    Boolean(location?.insideServiceArea) && description.trim().length >= 5;
 
   return (
     <form onSubmit={submit} className="grid gap-5 lg:grid-cols-5">
@@ -216,54 +201,19 @@ export default function ReportForm() {
             title="1 · Where is the problem?"
             subtitle="Ward and department routing are both derived from this coordinate."
             action={
-              fix ? (
+              location ? (
                 <Pill className="bg-emerald-500/15 text-emerald-300 ring-emerald-500/30">
-                  ±{Math.round(fix.accuracy)} m
+                  Location set
                 </Pill>
               ) : null
             }
           />
           <div className="p-4">
-            {fix ? (
-              <dl className="grid grid-cols-3 gap-3">
-                <Field label="Latitude" mono value={fix.latitude.toFixed(6)} />
-                <Field label="Longitude" mono value={fix.longitude.toFixed(6)} />
-                <Field
-                  label="Accuracy"
-                  value={
-                    config && fix.accuracy > config.gps_accuracy_max_meters ? (
-                      <span className="text-amber-300">
-                        {Math.round(fix.accuracy)} m — too imprecise
-                      </span>
-                    ) : (
-                      `${Math.round(fix.accuracy)} m`
-                    )
-                  }
-                />
-              </dl>
-            ) : (
-              <p className="text-sm text-mute">
-                No location yet.
-                {config
-                  ? ` Fixes coarser than ${config.gps_accuracy_max_meters} m are flagged.`
-                  : ""}
-              </p>
-            )}
-            <button
-              type="button"
-              onClick={locate}
-              disabled={locating}
-              className="mt-3 rounded-lg bg-brand-600 px-3.5 py-2 text-sm font-medium text-ink-950 transition hover:bg-brand-500 disabled:opacity-50"
-            >
-              {locating
-                ? "Getting location…"
-                : fix
-                  ? "Refresh location"
-                  : "Use my location"}
-            </button>
-            {locationError ? (
-              <p className="mt-2 text-xs text-rose-300">{locationError}</p>
-            ) : null}
+            <LocationPicker
+              value={location}
+              onChange={setLocation}
+              maxAccuracyMeters={config?.gps_accuracy_max_meters}
+            />
           </div>
         </Card>
 
@@ -394,25 +344,41 @@ export default function ReportForm() {
                 </button>
               ))}
             </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <input
-                value={phone}
-                onChange={(event) => setPhone(event.target.value)}
-                placeholder="Phone (optional, e.g. +919000000001)"
-                className="rounded-lg border border-ink-600 bg-ink-850 px-3 py-2 text-sm text-slate-100 placeholder:text-mute/70 focus:border-brand-500 focus:outline-none"
-              />
-              <input
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder="Name (optional)"
-                className="rounded-lg border border-ink-600 bg-ink-850 px-3 py-2 text-sm text-slate-100 placeholder:text-mute/70 focus:border-brand-500 focus:outline-none"
-              />
-            </div>
-            <p className="text-xs text-mute">
-              Reporting anonymously is allowed. Giving a phone number builds a
-              trust score over confirmed reports, which raises how far your
-              reports get automatically.
-            </p>
+            {user ? (
+              <p className="rounded-lg border border-ink-600 bg-ink-850/60 px-3 py-2 text-xs leading-relaxed text-mute">
+                Reporting as{" "}
+                <strong className="font-semibold text-slate-300">
+                  {user.display_name}
+                </strong>
+                . This report will appear under your reports, and its outcome
+                will adjust your trust score.
+              </p>
+            ) : (
+              <>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <input
+                    value={phone}
+                    onChange={(event) => setPhone(event.target.value)}
+                    placeholder="Phone (optional, e.g. +919000000001)"
+                    className="rounded-lg border border-ink-600 bg-ink-850 px-3 py-2 text-sm text-slate-100 placeholder:text-mute/70 focus:border-brand-500 focus:outline-none"
+                  />
+                  <input
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    placeholder="Name (optional)"
+                    className="rounded-lg border border-ink-600 bg-ink-850 px-3 py-2 text-sm text-slate-100 placeholder:text-mute/70 focus:border-brand-500 focus:outline-none"
+                  />
+                </div>
+                <p className="text-xs text-mute">
+                  Reporting anonymously is allowed.{" "}
+                  <a href="/login" className="text-brand-400 hover:underline">
+                    Sign in
+                  </a>{" "}
+                  to track your reports and build a trust score over confirmed
+                  ones, which raises how far future reports get automatically.
+                </p>
+              </>
+            )}
           </div>
         </Card>
 

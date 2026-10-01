@@ -23,3 +23,8 @@ Pillow==11.1.0
 # --- misc ---
 httpx==0.28.1
 python-dotenv==1.0.1
+
+# --- authentication ---
+bcrypt==4.2.1
+PyJWT==2.10.1
+email-validator==2.2.0
