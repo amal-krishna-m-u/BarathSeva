@@ -437,3 +437,30 @@ class TestModelRotation:
 
         assert result.ok is False
         assert len(seen) == 3  # _MAX_MODEL_ATTEMPTS
+
+    def test_retries_a_per_model_429_on_the_next_model(self, monkeypatch):
+        """Gemini meters per model: one model's 429 says nothing about another's."""
+        monkeypatch.setattr(settings, "gemini_fallback_models", "model-b", raising=False)
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(str(request.url).split("/models/")[1].split(":")[0])
+            if len(seen) == 1:
+                return httpx.Response(429, json={"error": {"message": "quota"}})
+            return httpx.Response(200, json=_gemini_body({"ok": True}))
+
+        provider = _provider(handler)
+        provider.model = "model-a"
+        assert provider.infer(_make_request()).ok is True
+        assert seen == ["model-a", "model-b"]
+
+    def test_all_models_rate_limited_still_surfaces_RATE_LIMITED(self, monkeypatch):
+        """The ladder downstream must still see the signal it depends on."""
+        monkeypatch.setattr(settings, "gemini_fallback_models", "model-b", raising=False)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(429, json={"error": {"message": "quota"}})
+
+        result = _provider(handler).infer(_make_request())
+        assert result.ok is False
+        assert result.error_kind == ErrorKind.RATE_LIMITED

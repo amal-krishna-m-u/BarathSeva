@@ -33,9 +33,20 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 #: Failures worth retrying on a different model. A bad key (AUTH) or a
-#: malformed reply (BAD_RESPONSE) will fail identically everywhere, and
-#: RATE_LIMITED is the cross-provider ladder's business, not this loop's.
-_RETRYABLE_KINDS = {ErrorKind.SERVER, ErrorKind.TIMEOUT, ErrorKind.NETWORK}
+#: malformed reply (BAD_RESPONSE) fails identically everywhere, so retrying
+#: those only burns the request budget.
+#:
+#: RATE_LIMITED is included because Gemini meters per MODEL: gemini-3.8-flash
+#: returning 429 says nothing about gemini-3.1-flash-lite's quota. This does
+#: NOT hide the signal from the cross-provider ladder -- when every model in
+#: the rotation is rate limited, the final result returned is still the last
+#: one, so its RATE_LIMITED kind survives.
+_RETRYABLE_KINDS = {
+    ErrorKind.SERVER,
+    ErrorKind.TIMEOUT,
+    ErrorKind.NETWORK,
+    ErrorKind.RATE_LIMITED,
+}
 
 #: Total attempts including the configured model. Bounded because every
 #: attempt spends the full request timeout on the intake path.

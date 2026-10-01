@@ -311,3 +311,25 @@ export type LocationSource =
   | "map_picked"
   | "geocoded"
   | "unknown";
+
+/** An AI provider's configuration as the admin dashboard sees it.
+ *  `masked_key` is a display mask — the real key is never sent to the client. */
+export interface ProviderCredential {
+  provider: string;
+  configured: boolean;
+  masked_key: string | null;
+  model: string;
+  /** Where the live value comes from: a saved row, the server env, or nowhere. */
+  source: "database" | "environment" | "none";
+  is_active: boolean;
+  updated_at: string | null;
+}
+
+export interface ProviderTestResult {
+  provider: string;
+  model: string;
+  ok: boolean;
+  latency_ms: number | null;
+  error_kind: string | null;
+  detail: string | null;
+}

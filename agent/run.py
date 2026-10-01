@@ -257,7 +257,7 @@ def triage(payload: dict[str, Any], mode: str) -> str:
     if held:
         out("## Outcome — HELD FOR REVIEW")
         out("")
-        out(f"This complaint stops here because {hold_reason}.")
+        out(f"**Why:** {hold_reason.rstrip('.')}.")
         out("")
         out(
             "In the full platform it moves to `PENDING_REVIEW` with "

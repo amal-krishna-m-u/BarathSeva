@@ -2,18 +2,20 @@
 
 import { getToken } from "./token";
 import type {
+  AuthUser,
   ComplaintDetail,
   ComplaintListItem,
   ComplaintStatus,
-  Hotspot,
-  PublicConfig,
-  SocialPost,
-  AuthUser,
   DepartmentStats,
   DepartmentSummary,
   GeocodeResult,
+  Hotspot,
+  ProviderCredential,
+  ProviderTestResult,
+  PublicConfig,
   ReverseGeocodeResult,
   SessionResponse,
+  SocialPost,
   Stats,
   SubmitResponse,
   SweepResult,
@@ -265,3 +267,28 @@ export const geocodeDefaults = () =>
     city: string;
     attribution: string;
   }>("/api/geocode/defaults");
+
+// --- AI provider credentials (super admin) ---------------------------------
+export const listProviders = () =>
+  request<ProviderCredential[]>("/api/admin/ai-providers");
+
+/** Omit `api_key` to leave the stored key untouched; send "" to clear it. */
+export const updateProvider = (
+  provider: string,
+  body: { api_key?: string; model?: string; make_active?: boolean },
+) =>
+  request<ProviderCredential>(`/api/admin/ai-providers/${provider}`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+
+export const clearProvider = (provider: string) =>
+  request<ProviderCredential>(`/api/admin/ai-providers/${provider}`, {
+    method: "DELETE",
+  });
+
+/** Spends one real inference call to prove the key works. */
+export const testProvider = (provider: string) =>
+  request<ProviderTestResult>(`/api/admin/ai-providers/${provider}/test`, {
+    method: "POST",
+  });
