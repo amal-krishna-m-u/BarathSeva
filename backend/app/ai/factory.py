@@ -48,6 +48,25 @@ def _build_provider() -> AIProvider:
             logger.warning("Gemini provider unavailable (%s); using stub", exc)
             return StubProvider()
 
+    if choice in {"nvidia", "kimi"}:
+        if not settings.nvidia_api_key:
+            logger.warning(
+                "ai_provider=%s but BARATHSEVA_NVIDIA_API_KEY is unset; using stub", choice
+            )
+            return StubProvider()
+        try:
+            from app.ai.nvidia_provider import NvidiaProvider
+
+            return NvidiaProvider(
+                settings.nvidia_api_key,
+                settings.nvidia_model,
+                settings.nvidia_base_url,
+                settings.ai_request_timeout_seconds,
+            )
+        except Exception as exc:
+            logger.warning("NVIDIA provider unavailable (%s); using stub", exc)
+            return StubProvider()
+
     logger.warning("Unknown ai_provider=%r; using stub", choice)
     return StubProvider()
 
