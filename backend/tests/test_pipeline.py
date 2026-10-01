@@ -190,6 +190,49 @@ class TestIntakePipeline:
         assert result.authenticity_outcome == AuthenticityOutcome.AUTO_ACCEPT.value
         assert result.workflow_state["trace"] == ["evidence_gate", "verifier"]
 
+    def test_verifier_rejects_a_stringly_false_is_civic_issue(self, db, citizen, photo, monkeypatch):
+        """Regression test for the bool("false") inversion (D1/D2).
+
+        A real model routinely returns the JSON string "false" rather than a
+        boolean. ``bool("false")`` is ``True`` in Python, so before the
+        app.ai.coerce fix this provider response would have been recorded as
+        a valid civic issue. It must come out rejected.
+        """
+        from app.ai import factory
+
+        class _StringlyFalseProvider:
+            name = "fake-stringly"
+            model = "fake-model"
+            is_ai = True
+
+            def infer(self, request):
+                from app.ai.base import InferenceResult, Task
+
+                if request.task == Task.VERIFY:
+                    return InferenceResult(
+                        data={
+                            "is_civic_issue": "false",
+                            "evidence_sufficient": "true",
+                            "category_hint": "OTHER",
+                        },
+                        rationale="Depicts a selfie, not a civic issue.",
+                        confidence=0.9,
+                        provider=self.name,
+                        model=self.model,
+                        is_ai=True,
+                    )
+                raise AssertionError("pipeline must stop at the verifier")
+
+        monkeypatch.setattr(factory, "get_provider", lambda: _StringlyFalseProvider())
+
+        result = submit(
+            db, citizen, photo, "Large pothole near Koramangala 5th Block", KORAMANGALA, seed=77
+        )
+        complaint = db.get(Complaint, result.complaint_id)
+        assert complaint.status is ComplaintStatus.REJECTED
+        assert complaint.is_verified is False
+        assert result.workflow_state["trace"] == ["evidence_gate", "verifier"]
+
     def test_corroboration_builds_a_hotspot_and_raises_priority(
         self, db, citizen, photo
     ):

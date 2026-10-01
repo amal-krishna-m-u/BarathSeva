@@ -14,6 +14,7 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 
 from app.agents.base import AgentResult, execute
+from app.ai.coerce import as_enum
 from app.ai.factory import infer
 from app.ai.prompts import build_classify
 from app.core import media
@@ -28,11 +29,15 @@ VALID_PRIORITIES = {p.value for p in Priority}
 
 
 def _coerce(value: Any, allowed: set[str], default: str) -> tuple[str, bool]:
-    """Return (value, was_coerced)."""
+    """Return (value, was_coerced).
+
+    Normalises separators before deferring to ``as_enum`` for the actual
+    membership check, so a model answer like "pot-hole" or "Road Damage"
+    still matches the controlled vocabulary instead of being discarded.
+    """
     candidate = str(value or "").strip().upper().replace(" ", "_").replace("-", "_")
-    if candidate in allowed:
-        return candidate, False
-    return default, True
+    coerced = as_enum(candidate, allowed, default)
+    return coerced, coerced != candidate
 
 
 def run(db: Session, complaint: Complaint, state: dict[str, Any]) -> AgentResult:
