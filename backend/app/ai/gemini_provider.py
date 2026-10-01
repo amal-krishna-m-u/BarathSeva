@@ -1,58 +1,134 @@
-"""Google Gemini adapter. Imported lazily so the SDK is an optional dependency."""
+"""Google Gemini adapter — plain ``httpx`` REST, no vendor SDK.
+
+``google-genai`` is an optional dependency that is not installed in this
+environment, so going through the SDK meant this file failed at import and
+had zero test coverage: ``ai_provider=gemini`` silently degraded to the stub
+via ``factory.py``'s try/except, with nothing exercising the degrade path on
+purpose. Speaking the Gemini REST API (``POST
+.../v1beta/models/{model}:generateContent``) directly over ``httpx`` removes
+that dependency risk entirely, and — the decisive reason — turns rate-limit
+detection into a plain HTTP status code and response body instead of an
+SDK-specific exception type. That is exactly the shape ``app.ai.errors``
+already understands, and exactly what the primary-is-rate-limited fallback
+ladder needs: Gemini is consulted only when NVIDIA NIM (the primary) reports
+a 429, so this module's own 429/``RESOURCE_EXHAUSTED`` handling has to be
+correct for the ladder to ever reach Gemini at all.
+"""
 
 from __future__ import annotations
 
+import base64
+import io
 import json
 import time
-from typing import Any
+from typing import Any, Optional
+
+import httpx
 
 from app.ai.base import InferenceRequest, InferenceResult
+from app.ai.errors import ErrorKind, classify_exception, is_rate_limit_body
+from app.config import settings
+
+
+def _downscale_or_drop_image(
+    data: bytes, mime: Optional[str]
+) -> tuple[Optional[bytes], Optional[str]]:
+    """Keep an oversized image from blowing out the request body/token
+    budget: downscale with Pillow when ``data`` exceeds
+    ``settings.ai_max_image_bytes``, and if Pillow cannot decode it, drop the
+    image entirely so inference proceeds text-only rather than failing the
+    whole request over a bad upload.
+
+    NOTE for the reviewer: this duplicates the guard Task 3 is building as
+    ``app/ai/images.py``. That module belongs to a parallel worktree and does
+    not exist here, so the same semantics are reimplemented inline, kept in
+    this one small function so it is trivially extractable. Consolidate the
+    two into a single shared helper at merge time.
+    """
+    if len(data) <= settings.ai_max_image_bytes:
+        return data, mime
+
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as img:
+            rgb = img.convert("RGB")
+            width, height = rgb.size
+            buf = io.BytesIO()
+            rgb.save(buf, format="JPEG", quality=85)
+            # Halve repeatedly until under budget or too small to shrink
+            # further — a fixed quality setting with iterative resizing is
+            # simpler to reason about than a quality search, and this path
+            # only runs for the rare oversized upload.
+            while buf.tell() > settings.ai_max_image_bytes and min(width, height) > 64:
+                width = max(1, int(width * 0.75))
+                height = max(1, int(height * 0.75))
+                resized = rgb.resize((width, height))
+                buf = io.BytesIO()
+                resized.save(buf, format="JPEG", quality=85)
+            return buf.getvalue(), "image/jpeg"
+    except Exception:
+        return None, None
 
 
 class GeminiProvider:
     name = "gemini"
     is_ai = True
 
-    def __init__(self, api_key: str, model: str) -> None:
-        from google import genai  # imported here: optional dependency
-
-        self._genai = genai
-        self._client = genai.Client(api_key=api_key)
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        *,
+        transport: Optional[httpx.BaseTransport] = None,
+    ) -> None:
+        self._api_key = api_key
         self.model = model
+        self._base_url = settings.gemini_base_url.rstrip("/")
+        #: ``transport`` lets tests inject ``httpx.MockTransport`` with no
+        #: network and no API key. ``None`` uses httpx's real transport.
+        self._client = httpx.Client(
+            transport=transport,
+            timeout=httpx.Timeout(settings.ai_request_timeout_seconds),
+        )
 
     def infer(self, request: InferenceRequest) -> InferenceResult:
         started = time.perf_counter()
-        parts: list[Any] = [
-            (
-                f"{request.system}\n\n{request.user}\n\n"
-                f"Return JSON with exactly these fields:\n"
-                f"{json.dumps(request.schema, indent=2)}"
-            )
-        ]
-        if request.image_bytes:
-            parts.append(
-                self._genai.types.Part.from_bytes(
-                    data=request.image_bytes,
-                    mime_type=request.image_mime or "image/jpeg",
-                )
+
+        image_bytes, image_mime = request.image_bytes, request.image_mime
+        if image_bytes:
+            image_bytes, image_mime = _downscale_or_drop_image(image_bytes, image_mime)
+
+        payload = self._build_payload(request, image_bytes, image_mime)
+        url = f"{self._base_url}/v1beta/models/{self.model}:generateContent"
+
+        try:
+            response = self._client.post(url, params={"key": self._api_key}, json=payload)
+            response.raise_for_status()
+        except Exception as exc:
+            return self._error_result(started, exc)
+
+        if is_rate_limit_body(response.text):
+            # Google does not always pair RESOURCE_EXHAUSTED with a 429
+            # status; a 2xx response can still carry it in the body. This
+            # catches that case directly since raise_for_status() above
+            # never raises on a 2xx.
+            return self._error_result(
+                started,
+                RuntimeError(f"rate limit signalled in response body: {response.text[:200]}"),
+                forced_kind=ErrorKind.RATE_LIMITED,
             )
 
         try:
-            response = self._client.models.generate_content(
-                model=self.model,
-                contents=parts,
-                config={"response_mime_type": "application/json", "temperature": 0.2},
-            )
-            data = json.loads(response.text or "{}")
-        except Exception as exc:
-            return InferenceResult(
-                data={},
-                provider=self.name,
-                model=self.model,
-                latency_ms=int((time.perf_counter() - started) * 1000),
-                is_ai=True,
-                error=f"{type(exc).__name__}: {exc}",
-            )
+            body = response.json()
+            text = body["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+            return self._error_result(started, ValueError(f"malformed Gemini response: {exc}"))
+
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            return self._error_result(started, exc)
 
         return InferenceResult(
             data=data,
@@ -62,4 +138,51 @@ class GeminiProvider:
             model=self.model,
             latency_ms=int((time.perf_counter() - started) * 1000),
             is_ai=True,
+        )
+
+    def _build_payload(
+        self,
+        request: InferenceRequest,
+        image_bytes: Optional[bytes],
+        image_mime: Optional[str],
+    ) -> dict[str, Any]:
+        parts: list[dict[str, Any]] = [
+            {
+                "text": (
+                    f"{request.system}\n\n{request.user}\n\n"
+                    f"Return JSON with exactly these fields:\n"
+                    f"{json.dumps(request.schema, indent=2)}"
+                )
+            }
+        ]
+        if image_bytes:
+            parts.append(
+                {
+                    "inline_data": {
+                        "mime_type": image_mime or "image/jpeg",
+                        "data": base64.b64encode(image_bytes).decode(),
+                    }
+                }
+            )
+        return {
+            "contents": [{"parts": parts}],
+            "generationConfig": {"response_mime_type": "application/json", "temperature": 0.2},
+        }
+
+    def _error_result(
+        self,
+        started: float,
+        exc: Exception,
+        *,
+        forced_kind: Optional[str] = None,
+    ) -> InferenceResult:
+        kind = forced_kind or classify_exception(exc)
+        return InferenceResult(
+            data={},
+            provider=self.name,
+            model=self.model,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            is_ai=True,
+            error=f"{type(exc).__name__}: {exc}",
+            error_kind=kind,
         )

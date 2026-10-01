@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     gemini_api_key: Optional[str] = None
     gemini_model: str = "gemini-2.0-flash"
+    #: Gemini REST host. Only app/ai/gemini_provider.py reads this.
+    gemini_base_url: str = "https://generativelanguage.googleapis.com"
 
     # --- NVIDIA NIM (Kimi K3) ---
     nvidia_api_key: Optional[str] = None
