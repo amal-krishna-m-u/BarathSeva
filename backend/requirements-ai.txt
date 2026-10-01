@@ -1,4 +1,7 @@
 # Optional model-provider SDKs. The platform runs without these using the
-# deterministic stub provider (JANSEVA_AI_PROVIDER=stub).
+# deterministic stub provider (BARATHSEVA_AI_PROVIDER=stub).
+#
+# The nvidia and gemini providers are implemented over plain httpx (already a
+# core dependency) and need NO SDK from this file. This file exists only for
+# the optional openai provider.
 openai==1.59.6
-google-genai==0.3.0

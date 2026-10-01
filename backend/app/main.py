@@ -82,6 +82,11 @@ def on_startup() -> None:
         settings.ai_provider,
         settings.require_admin_key,
     )
+    # Degrade, don't refuse to boot: a misconfigured provider or secret must
+    # not stop citizen intake, which still has the stub pipeline to fall
+    # back on. validate_runtime() never raises.
+    for warning in settings.validate_runtime():
+        logger.warning(warning)
 
 
 @app.get("/", include_in_schema=False)
