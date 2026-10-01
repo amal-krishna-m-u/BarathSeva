@@ -1,0 +1,24 @@
+# Keep secrets and bulk out of the build context entirely.
+# The agent Dockerfile uses explicit COPY paths, so nothing here is in the
+# image today -- this exists so that stays true if someone later writes
+# `COPY . .`, and so credentials are never even sent to the Docker daemon.
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+
+.git
+.gitignore
+**/.venv
+**/__pycache__
+**/*.pyc
+**/node_modules
+**/.next
+**/.pytest_cache
+**/media
+**/media_test
+**/*.log
+.superpowers
+docs
+frontend

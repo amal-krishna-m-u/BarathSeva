@@ -35,7 +35,16 @@ def _dashboard_config() -> tuple[str, dict[str, object]]:
             choice = (active_provider(db) or "stub").strip().lower()
             resolved = {p: resolve(db, p) for p in CONFIGURABLE_PROVIDERS}
             return choice, resolved
+    except ImportError as exc:
+        # The credentials stack is not installed at all. That is a deliberate
+        # deployment shape -- the aiKart sandbox image ships without the
+        # database layer on purpose -- not a fault, so it must not log like
+        # one on every single inference.
+        logger.debug("credentials stack unavailable (%s); using settings", exc)
+        return (settings.ai_provider or "stub").strip().lower(), {}
     except Exception as exc:  # pragma: no cover - defensive
+        # Installed but unreachable: a database that should be there and is
+        # not. Worth a warning, because somebody needs to look at it.
         logger.warning("could not read provider credentials (%s); using settings", exc)
         return (settings.ai_provider or "stub").strip().lower(), {}
 
