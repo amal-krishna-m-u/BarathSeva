@@ -8,12 +8,13 @@ already-persisted complaint.
 from __future__ import annotations
 
 import logging
+from typing import Optional
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import admin, auth, complaints, department, geocode, health, telegram
-from app.config import settings
+from app.config import Settings, settings
 from app.core.ids import ensure_sequence
 from app.db import SessionLocal
 
@@ -68,6 +69,45 @@ app.include_router(complaints.router)
 app.include_router(department.router)
 app.include_router(admin.router)
 app.include_router(telegram.router)
+
+
+def register_mock_routers(app: FastAPI, settings_obj: Optional[Settings] = None) -> None:
+    """Register every mock-surface router, gated on mock_apis_enabled.
+
+    Mock surfaces simulate third-party systems (an LLM provider today; the
+    mock government gateway and others join this same function in later
+    tasks) so the platform is fully runnable and testable with no API keys
+    and no live credentials. They must be impossible to expose in production
+    even if an operator leaves ``enable_mock_apis=true`` in a shared config,
+    so the gate is the ``mock_apis_enabled`` *property* (which also checks
+    ``environment``), never the raw flag.
+
+    Routers are bound at import time in FastAPI, so a bare
+    ``if settings.mock_apis_enabled: app.include_router(...)`` at module
+    scope could only be tested by reload-ing ``app.main`` — fragile and
+    order-dependent across a long test session. Putting the check in a
+    function instead lets a test build a throwaway ``FastAPI()``, construct
+    a ``Settings(environment="production", ...)`` directly (as
+    ``tests/test_config.py`` already does) and pass it in via
+    ``settings_obj`` to assert the routes are absent, with no monkeypatching
+    and no cross-test state.
+
+    Called once at module scope below for the real app, using the process's
+    actual ``settings``.
+    """
+    settings_obj = settings_obj or settings
+    if not settings_obj.mock_apis_enabled:
+        return
+
+    from app.api import mock_llm
+
+    app.include_router(mock_llm.router)
+    # Task 7 (mock government gateway HTTP surface) and Task 11 register
+    # their routers here too — keep this the single place mock surfaces are
+    # wired up.
+
+
+register_mock_routers(app)
 
 
 @app.on_event("startup")
