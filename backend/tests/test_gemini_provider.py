@@ -357,3 +357,83 @@ class TestNoGoogleImport:
             elif isinstance(node, ast.ImportFrom):
                 module = node.module or ""
                 assert not module.split(".")[0] == "google"
+
+
+class TestModelRotation:
+    """A 503 on one model must not become a held complaint.
+
+    The image gate fails closed, so an unanswered check sends a genuine
+    report to a human reviewer. Google's free tier fails per-model and which
+    model is healthy rotates minute to minute, so retrying on an alternate is
+    the difference between a real verdict and a review queue full of
+    legitimate potholes.
+    """
+
+    def test_retries_on_503_and_succeeds_on_the_alternate(self, monkeypatch):
+        monkeypatch.setattr(
+            settings, "gemini_fallback_models", "model-b,model-c", raising=False
+        )
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(str(request.url).split("/models/")[1].split(":")[0])
+            if len(seen) == 1:
+                return httpx.Response(503, json={"error": {"message": "high demand"}})
+            return httpx.Response(200, json=_gemini_body({"ok": True}))
+
+        provider = _provider(handler)
+        provider.model = "model-a"
+        result = provider.infer(_make_request())
+
+        assert result.ok is True
+        assert seen == ["model-a", "model-b"]
+        # The result must name the model that actually answered.
+        assert result.model == "model-b"
+
+    def test_retries_on_timeout(self, monkeypatch):
+        monkeypatch.setattr(settings, "gemini_fallback_models", "model-b", raising=False)
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(str(request.url).split("/models/")[1].split(":")[0])
+            if len(seen) == 1:
+                raise httpx.ReadTimeout("timed out", request=request)
+            return httpx.Response(200, json=_gemini_body({"ok": True}))
+
+        provider = _provider(handler)
+        provider.model = "model-a"
+        assert provider.infer(_make_request()).ok is True
+        assert seen == ["model-a", "model-b"]
+
+    def test_does_not_retry_a_bad_api_key(self, monkeypatch):
+        """AUTH fails identically on every model; retrying just burns time."""
+        monkeypatch.setattr(settings, "gemini_fallback_models", "model-b", raising=False)
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append("call")
+            return httpx.Response(401, json={"error": {"message": "bad key"}})
+
+        provider = _provider(handler)
+        result = provider.infer(_make_request())
+
+        assert result.ok is False
+        assert result.error_kind == ErrorKind.AUTH
+        assert len(seen) == 1
+
+    def test_attempts_are_bounded(self, monkeypatch):
+        """Every attempt spends the full timeout on the intake path."""
+        monkeypatch.setattr(
+            settings, "gemini_fallback_models", "b,c,d,e,f", raising=False
+        )
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append("call")
+            return httpx.Response(503, json={"error": {"message": "high demand"}})
+
+        provider = _provider(handler)
+        result = provider.infer(_make_request())
+
+        assert result.ok is False
+        assert len(seen) == 3  # _MAX_MODEL_ATTEMPTS

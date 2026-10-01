@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import time
 from typing import Any, Optional
 
@@ -28,6 +29,17 @@ from app.ai.base import InferenceRequest, InferenceResult
 from app.ai.errors import ErrorKind, classify_exception, is_rate_limit_body
 from app.ai.images import prepare_image_for_inference
 from app.config import settings
+
+logger = logging.getLogger(__name__)
+
+#: Failures worth retrying on a different model. A bad key (AUTH) or a
+#: malformed reply (BAD_RESPONSE) will fail identically everywhere, and
+#: RATE_LIMITED is the cross-provider ladder's business, not this loop's.
+_RETRYABLE_KINDS = {ErrorKind.SERVER, ErrorKind.TIMEOUT, ErrorKind.NETWORK}
+
+#: Total attempts including the configured model. Bounded because every
+#: attempt spends the full request timeout on the intake path.
+_MAX_MODEL_ATTEMPTS = 3
 
 
 class GeminiProvider:
@@ -52,6 +64,41 @@ class GeminiProvider:
         )
 
     def infer(self, request: InferenceRequest) -> InferenceResult:
+        models = self._model_rotation()
+        result = None
+        for index, model in enumerate(models):
+            result = self._attempt(request, model)
+            if result.ok or result.error_kind not in _RETRYABLE_KINDS:
+                return result
+            if index + 1 < len(models):
+                logger.warning(
+                    "gemini model %s failed on task %s (%s); retrying with %s",
+                    model,
+                    request.task,
+                    result.error_kind,
+                    models[index + 1],
+                )
+        return result
+
+    def _model_rotation(self) -> list[str]:
+        """The configured model first, then alternates, de-duplicated.
+
+        Google's free tier returns 503 "experiencing high demand" and read
+        timeouts on a per-model basis, and which model is healthy rotates
+        minute to minute. Without this, a transient 503 on one model becomes a
+        held complaint: the image gate fails closed, so an unanswered check
+        sends a perfectly genuine pothole to a human reviewer. Trying the next
+        model costs a few seconds and converts most of those holds back into
+        real answers.
+        """
+        rotation = [self.model]
+        for alt in (settings.gemini_fallback_models or "").split(","):
+            alt = alt.strip()
+            if alt and alt not in rotation:
+                rotation.append(alt)
+        return rotation[:_MAX_MODEL_ATTEMPTS]
+
+    def _attempt(self, request: InferenceRequest, model: str) -> InferenceResult:
         started = time.perf_counter()
 
         image_bytes, image_mime = request.image_bytes, request.image_mime
@@ -63,7 +110,7 @@ class GeminiProvider:
             )
 
         payload = self._build_payload(request, image_bytes, image_mime)
-        url = f"{self._base_url}/v1beta/models/{self.model}:generateContent"
+        url = f"{self._base_url}/v1beta/models/{model}:generateContent"
 
         try:
             response = self._client.post(url, params={"key": self._api_key}, json=payload)
@@ -98,7 +145,7 @@ class GeminiProvider:
             rationale=str(data.get("rationale", "")),
             confidence=float(data.get("confidence", 0.5) or 0.5),
             provider=self.name,
-            model=self.model,
+            model=model,
             latency_ms=int((time.perf_counter() - started) * 1000),
             is_ai=True,
         )

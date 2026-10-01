@@ -1,0 +1,84 @@
+apiVersion: aikart.dev/v1
+kind: AgentManifest
+
+metadata:
+  name: startrek-civic-triage
+  displayName: "BarathSeva Civic Complaint Triage"
+  description: "Triages a civic complaint: checks the photo against the text, verifies the issue, classifies it, and routes it to the owning department with an SLA."
+
+runtime:
+  type: docker
+  # NOTE: push to a namespace your team owns before submitting; aiKart must be
+  # able to pull this anonymously.
+  image: "docker.io/startrek/barathseva-civic-triage:1.0.0"
+  command: ["python", "run.py"]
+
+resources:
+  cpu: 1
+  # 2048MB covers Pillow plus the image buffers; the agent holds one photo at a
+  # time and never loads a model locally.
+  memoryMb: 2048
+  # Three sequential model calls (image guard, verify, classify). Measured
+  # 6-16s each against Gemini 3 Flash, so ~50s typical. 240s leaves headroom
+  # for a slow provider without reaching the 280s hard cap.
+  timeoutSeconds: 240
+
+inputs:
+  - name: description
+    label: "Complaint text"
+    type: textarea
+    required: true
+    default: "Large pothole on 5th Main, Koramangala. Very dangerous for two-wheelers at night."
+
+  - name: sample_photo
+    label: "Attach a photo (bundled samples)"
+    type: select
+    required: false
+    options:
+      - "None"
+      - "Road with a pothole"
+      - "Indoor room"
+      - "Cartoon illustration"
+      - "Blank frame"
+    default: "Road with a pothole"
+
+  - name: photo_base64
+    label: "…or paste your own photo as base64 (optional, overrides the sample)"
+    type: textarea
+    required: false
+
+  - name: locality
+    label: "Locality"
+    type: select
+    required: false
+    options:
+      - "Koramangala"
+      - "Indiranagar"
+      - "Jayanagar"
+      - "Whitefield"
+      - "HSR Layout"
+      - "Malleshwaram"
+      - "Electronic City"
+      - "Yelahanka"
+    default: "Koramangala"
+
+  - name: gemini_api_key
+    label: "Gemini API key (optional — enables the real image check)"
+    type: text
+    required: false
+
+  - name: gemini_model
+    label: "Gemini model (optional)"
+    type: text
+    required: false
+    default: "gemini-3.8-flash"
+
+output:
+  format: markdown
+
+security:
+  # Only used when a buyer supplies their own API key. With no key the agent
+  # runs fully offline on deterministic rules and makes no outbound request.
+  networkEgress: allowlist
+  egressAllowlist:
+    - "generativelanguage.googleapis.com"

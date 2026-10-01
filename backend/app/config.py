@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     #: gemini-2.5-flash both 404 ("no longer available to new users"), and
     #: gemini-3.8-flash / gemini-flash-latest returned 503. This one answers.
     gemini_model: str = "gemini-3-flash-preview"
+    #: Tried in order when the configured model returns a retryable failure
+    #: (503 / timeout / network). Google's free tier fails per-model and which
+    #: model is healthy rotates, so a single-model client holds genuine
+    #: complaints whenever its one model is busy.
+    gemini_fallback_models: str = "gemini-3.1-flash-lite,gemini-3.8-flash"
     #: Gemini REST host. Only app/ai/gemini_provider.py reads this.
     gemini_base_url: str = "https://generativelanguage.googleapis.com"
 

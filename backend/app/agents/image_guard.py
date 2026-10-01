@@ -31,32 +31,13 @@ from sqlalchemy.orm import Session
 from app.agents.base import AgentResult, execute
 from app.ai.coerce import as_bool, as_enum, as_float
 from app.ai.factory import infer
+from app.ai.image_policy import IMAGE_KINDS, MIN_CONFIDENCE, PASS_KINDS
 from app.ai.prompts import build_image_match
 from app.config import settings
 from app.core import media
 from app.models import Complaint, ComplaintEvidence
 
 AGENT_NAME = "image_guard"
-
-#: The controlled vocabulary the model must answer within. Anything outside it
-#: is a hallucination and degrades to UNREADABLE rather than reaching a verdict.
-IMAGE_KINDS = {
-    "CAMERA_PHOTO_PLAUSIBLE",
-    "PERSON_OR_GROUP",
-    "INDOOR_SCENE",
-    "SCREENSHOT_OR_REPOST",
-    "ILLUSTRATION_OR_RENDER",
-    "UNRELATED_SCENE",
-    "UNREADABLE",
-}
-
-#: The only kind that may continue automatically. Everything else is a human's
-#: decision -- including UNREADABLE, because "I could not tell" is not consent.
-PASS_KINDS = {"CAMERA_PHOTO_PLAUSIBLE"}
-
-#: Below this the model's own verdict is not trusted either way, so the
-#: complaint goes to a human rather than being auto-approved OR auto-rejected.
-MIN_CONFIDENCE = 0.40
 
 ROUTE_CONTINUE = "continue"
 ROUTE_HOLD = "hold"
