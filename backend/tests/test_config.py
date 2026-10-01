@@ -40,7 +40,7 @@ def test_defaults_load():
     assert settings.mock_gov_base_url == "http://localhost:8000/mock/gov"
     assert settings.gov_callback_secret is None
     # Unchanged per task brief: already the Flash model used as fallback.
-    assert settings.gemini_model == "gemini-2.0-flash"
+    assert settings.gemini_model == "gemini-3-flash-preview"
 
 
 def test_mock_apis_enabled_true_in_development():

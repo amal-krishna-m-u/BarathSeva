@@ -68,7 +68,10 @@ class Settings(BaseSettings):
     openai_api_key: Optional[str] = None
     openai_model: str = "gpt-4o-mini"
     gemini_api_key: Optional[str] = None
-    gemini_model: str = "gemini-2.0-flash"
+    #: Verified live against the API on 2026-10-01: gemini-2.0-flash and
+    #: gemini-2.5-flash both 404 ("no longer available to new users"), and
+    #: gemini-3.8-flash / gemini-flash-latest returned 503. This one answers.
+    gemini_model: str = "gemini-3-flash-preview"
     #: Gemini REST host. Only app/ai/gemini_provider.py reads this.
     gemini_base_url: str = "https://generativelanguage.googleapis.com"
 
