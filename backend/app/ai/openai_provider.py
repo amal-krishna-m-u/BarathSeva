@@ -5,9 +5,10 @@ from __future__ import annotations
 import base64
 import json
 import time
-from typing import Any
+from typing import Any, Optional
 
 from app.ai.base import InferenceRequest, InferenceResult
+from app.ai.errors import ErrorKind, classify_exception, classify_http_status, is_rate_limit_body
 from app.config import settings
 
 
@@ -15,10 +16,17 @@ class OpenAIProvider:
     name = "openai"
     is_ai = True
 
-    def __init__(self, api_key: str, model: str) -> None:
+    def __init__(self, api_key: str, model: str, base_url: Optional[str] = None) -> None:
         from openai import OpenAI  # imported here: optional dependency
 
-        self._client = OpenAI(api_key=api_key)
+        #: base_url lets this adapter point at an OpenAI-compatible endpoint
+        #: other than api.openai.com (e.g. the mock LLM in tests) without a
+        #: second provider class. Optional and defaults to the SDK's own
+        #: default when unset, so existing callers are unaffected.
+        client_kwargs: dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        self._client = OpenAI(**client_kwargs)
         self.model = model
 
     def infer(self, request: InferenceRequest) -> InferenceResult:
@@ -56,6 +64,23 @@ class OpenAIProvider:
             raw = response.choices[0].message.content or "{}"
             data = json.loads(raw)
         except Exception as exc:
+            # The openai SDK raises its own exception hierarchy (RateLimitError,
+            # AuthenticationError, ...), never httpx's — classify_exception's
+            # isinstance checks never fire on them. Those SDK exceptions do
+            # carry the HTTP status as `.status_code` when the failure came
+            # from the API itself, so that is classified directly (mirroring
+            # classify_exception's own AUTH/OTHER-can-upgrade-to-RATE_LIMITED,
+            # SERVER-cannot rule); anything without a status_code (e.g. a
+            # local JSON decode failure) still goes through classify_exception.
+            status_code = getattr(exc, "status_code", None)
+            if status_code is not None:
+                error_kind = classify_http_status(status_code)
+                if error_kind not in (ErrorKind.RATE_LIMITED, ErrorKind.SERVER) and is_rate_limit_body(
+                    str(exc)
+                ):
+                    error_kind = ErrorKind.RATE_LIMITED
+            else:
+                error_kind = classify_exception(exc)
             return InferenceResult(
                 data={},
                 provider=self.name,
@@ -63,6 +88,7 @@ class OpenAIProvider:
                 latency_ms=int((time.perf_counter() - started) * 1000),
                 is_ai=True,
                 error=f"{type(exc).__name__}: {exc}",
+                error_kind=error_kind,
             )
 
         return InferenceResult(

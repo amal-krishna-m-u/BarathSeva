@@ -15,10 +15,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional, Protocol, runtime_checkable
 
+from app.ai.errors import ErrorKind
+
 
 class Task:
     """Named inference tasks. The stub provider branches on these."""
 
+    #: Does the photograph actually depict what the citizen's text claims?
+    IMAGE_MATCH = "image_match"
     VERIFY = "verify"
     CLASSIFY = "classify"
     CLUSTER_SUMMARY = "cluster_summary"
@@ -49,10 +53,18 @@ class InferenceResult:
     latency_ms: int = 0
     is_ai: bool = False
     error: Optional[str] = None
+    #: Closed-vocabulary reason ``error`` happened (see ``app.ai.errors``).
+    #: Additive: ``error`` remains the human-readable string every caller
+    #: already reads; this is what a policy branches on instead of parsing it.
+    error_kind: Optional[str] = None
 
     @property
     def ok(self) -> bool:
         return self.error is None
+
+    @property
+    def rate_limited(self) -> bool:
+        return self.error_kind == ErrorKind.RATE_LIMITED
 
 
 @runtime_checkable

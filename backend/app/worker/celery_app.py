@@ -66,8 +66,8 @@ def run_intake_task(complaint_id: int, channel: str = "web") -> dict:
     """Run the intake graph out-of-band.
 
     The HTTP path runs the pipeline inline so a citizen sees their ticket
-    immediately. This task exists for the Telegram/webhook paths and for
-    retrying a complaint whose pipeline failed midway.
+    immediately. This task exists for retrying a complaint whose pipeline
+    failed midway, and for any future out-of-band intake channel.
     """
     from app.workflow.graph import run_intake
 

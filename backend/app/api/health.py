@@ -48,9 +48,6 @@ def health(db: Session = Depends(get_db)) -> dict[str, Any]:
         ),
     }
 
-    from app.integrations.telegram import client as telegram_client
-
-    checks["telegram"] = {"enabled": telegram_client.enabled}
     checks["government_apis"] = {
         "mode": "mock",
         "departments": ["BBMP", "BWSSB", "BESCOM"],

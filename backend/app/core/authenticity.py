@@ -255,11 +255,9 @@ def assess_evidence(
             "claims an in-app camera capture but cannot prove one.",
         )
     else:
-        # Telegram and gallery paths legitimately have no token: accept, weigh lower.
+        # A gallery upload legitimately has no token: accept, weigh lower.
         a.source = (
-            EvidenceSource.TELEGRAM
-            if channel == "telegram"
-            else EvidenceSource(declared_source)
+            EvidenceSource(declared_source)
             if declared_source in {s.value for s in EvidenceSource}
             else EvidenceSource.GALLERY
         )
@@ -574,7 +572,7 @@ def assess_evidence(
                 "reporter_unverified",
                 "Reporter identity unverified",
                 SEVERITY_WARN,
-                "No phone or Telegram verification on this account.",
+                "No phone verification on this account.",
                 delta=-0.08,
             )
 

@@ -310,5 +310,4 @@ export type LocationSource =
   | "device_gps"
   | "map_picked"
   | "geocoded"
-  | "telegram"
   | "unknown";

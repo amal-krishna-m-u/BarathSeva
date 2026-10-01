@@ -8,21 +8,22 @@ same 401/403 a hidden link would have. */
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useAuth } from "@/lib/auth";
+import { isStaffRole, useAuth } from "@/lib/auth";
 
-const CITIZEN_LINKS = [
-  { href: "/", label: "Report" },
-  { href: "/track", label: "Track" },
-];
+const REPORT_LINK = { href: "/", label: "Report" };
+const CITIZEN_LINKS = [{ href: "/track", label: "Track" }];
 
 export default function Nav() {
   const { user, loading, signOut } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
 
-  const links = [...CITIZEN_LINKS];
+  // Staff cannot file reports, so the Report link is not offered to them.
+  const links = isStaffRole(user?.role)
+    ? [...CITIZEN_LINKS]
+    : [REPORT_LINK, ...CITIZEN_LINKS];
   if (user) links.push({ href: "/my-reports", label: "My reports" });
-  if (user?.role === "DEPT_ADMIN" || user?.role === "SUPER_ADMIN") {
+  if (isStaffRole(user?.role)) {
     links.push({ href: "/department", label: "Department desk" });
   }
   if (user?.role === "SUPER_ADMIN") {

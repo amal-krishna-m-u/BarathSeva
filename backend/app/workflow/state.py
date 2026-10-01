@@ -22,6 +22,12 @@ class ComplaintState(TypedDict, total=False):
     evidence_signal_codes: list[str]
     has_photo: bool
 
+    # --- image guard ---
+    #: False when no vision provider ran (keyless, no photo, or provider down).
+    image_checked: bool
+    image_matches_text: Optional[bool]
+    image_kind: Optional[str]
+
     # --- verifier ---
     is_civic_issue: bool
     evidence_sufficient: bool

@@ -50,7 +50,6 @@ class Priority(str, Enum):
 class EvidenceSource(str, Enum):
     CAMERA = "camera"
     GALLERY = "gallery"
-    TELEGRAM = "telegram"
     NONE = "none"
 
 
@@ -95,7 +94,6 @@ class LocationSource(str, Enum):
     DEVICE_GPS = "device_gps"
     MAP_PICKED = "map_picked"
     GEOCODED = "geocoded"
-    TELEGRAM = "telegram"
     UNKNOWN = "unknown"
 
 

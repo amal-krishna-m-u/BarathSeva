@@ -63,6 +63,7 @@ class StubProvider:
     def infer(self, request: InferenceRequest) -> InferenceResult:
         started = time.perf_counter()
         handler = {
+            Task.IMAGE_MATCH: self._image_match,
             Task.VERIFY: self._verify,
             Task.CLASSIFY: self._classify,
             Task.CLUSTER_SUMMARY: self._cluster_summary,
@@ -166,6 +167,27 @@ class StubProvider:
             },
             rationale,
             confidence,
+        )
+
+    # ------------------------------------------------------------- image match
+    def _image_match(self, req: InferenceRequest) -> tuple[dict[str, Any], str, float]:
+        """Report, honestly, that no image inspection happened.
+
+        The deterministic stub has no vision. It must not answer "the photo
+        matches" — that would be the system asserting something nobody looked
+        at, which is the precise failure the image gate exists to prevent. It
+        returns ``unavailable`` and a null verdict, and ImageGuard reads
+        ``is_ai`` before it reads any of this.
+        """
+        return (
+            {
+                "image_matches_text": None,
+                "image_kind": "UNREADABLE",
+                "concern": "Deterministic stub cannot inspect image content.",
+                "unavailable": True,
+            },
+            "No image inspection performed: the deterministic provider cannot see images.",
+            0.0,
         )
 
     # ---------------------------------------------------------------- classify

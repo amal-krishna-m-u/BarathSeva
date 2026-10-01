@@ -9,7 +9,7 @@ up; classification quality degrades instead.
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
+import threading
 
 from app.ai.base import AIProvider, InferenceRequest, InferenceResult
 from app.ai.stub import StubProvider
@@ -48,15 +48,69 @@ def _build_provider() -> AIProvider:
             logger.warning("Gemini provider unavailable (%s); using stub", exc)
             return StubProvider()
 
+    if choice in {"nvidia", "kimi"}:
+        if not settings.nvidia_api_key:
+            logger.warning(
+                "ai_provider=%s but BARATHSEVA_NVIDIA_API_KEY is unset; using stub", choice
+            )
+            return StubProvider()
+        try:
+            from app.ai.nvidia_provider import NvidiaProvider
+
+            return NvidiaProvider(
+                settings.nvidia_api_key,
+                settings.nvidia_model,
+                settings.nvidia_base_url,
+                settings.ai_request_timeout_seconds,
+            )
+        except Exception as exc:
+            logger.warning("NVIDIA provider unavailable (%s); using stub", exc)
+            return StubProvider()
+
     logger.warning("Unknown ai_provider=%r; using stub", choice)
     return StubProvider()
 
 
-@lru_cache
+#: Module-level cached singleton, built lazily on first ``get_provider()``
+#: call. A bare zero-argument ``@lru_cache`` cannot be reset selectively or
+#: hold mutable state alongside the provider (the cooldown ladder in a later
+#: task needs exactly that), so the cache is explicit instead.
+_provider_cache: AIProvider | None = None
+
+#: Guards ``_provider_cache``. FastAPI runs sync routes on a threadpool, so
+#: concurrent first calls are reachable in production, not just a theoretical
+#: race. Double-construction of a stateless provider is harmless, but Task 8
+#: hangs mutable cooldown state off this exact singleton — a lost race there
+#: means lost cooldown writes and readers seeing inconsistent state. Do not
+#: remove this lock when that state is added; it is the reason it exists.
+_provider_lock = threading.Lock()
+
+
 def get_provider() -> AIProvider:
-    provider = _build_provider()
-    logger.info("AI provider: %s (%s, is_ai=%s)", provider.name, provider.model, provider.is_ai)
-    return provider
+    global _provider_cache
+    if _provider_cache is None:
+        with _provider_lock:
+            if _provider_cache is None:  # re-check: another thread may have built it
+                _provider_cache = _build_provider()
+                logger.info(
+                    "AI provider: %s (%s, is_ai=%s)",
+                    _provider_cache.name,
+                    _provider_cache.model,
+                    _provider_cache.is_ai,
+                )
+    return _provider_cache
+
+
+def reset_provider_cache() -> None:
+    """Drop the cached provider so the next ``get_provider()`` rebuilds it.
+
+    Tests use this to swap providers between cases (stub <-> fakes) without
+    process restarts; a later task uses it as the reset point for the
+    fallback chain's cooldown state.
+    """
+    global _provider_cache
+    with _provider_lock:
+        _provider_cache = None
 
 
 _FALLBACK = StubProvider()
@@ -77,4 +131,7 @@ def infer(request: InferenceRequest) -> InferenceResult:
     )
     fallback = _FALLBACK.infer(request)
     fallback.error = f"fell_back_from_{provider.name}: {result.error}"
+    # Additive only: carry forward *why* the primary failed. No branching on
+    # it here — the stub is still used unconditionally, exactly as before.
+    fallback.error_kind = result.error_kind
     return fallback

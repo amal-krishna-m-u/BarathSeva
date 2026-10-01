@@ -91,14 +91,14 @@ The citizen supplies what they naturally have — a sentence, a photo, a locatio
 
 ## 2. Solution Overview
 
-A complaint enters through the web app or a Telegram bot, is received by the FastAPI backend, and is then carried through a LangGraph workflow composed of specialized nodes. Every node writes its decision and output to PostgreSQL, which is the system's source of truth and the substrate for citizen status views, the admin dashboard, hotspot analytics, and the audit trail.
+A complaint enters through the web app, is received by the FastAPI backend, and is then carried through a LangGraph workflow composed of specialized nodes. Every node writes its decision and output to PostgreSQL, which is the system's source of truth and the substrate for citizen status views, the admin dashboard, hotspot analytics, and the audit trail.
 
 ```text
 Citizen
    |
    | Text + Photo + Location
    v
-Web / Telegram
+Web App
    |
    v
 FastAPI Backend
@@ -140,9 +140,9 @@ The important architectural choice is that this is a **controlled workflow of sp
 ```mermaid
 flowchart TD
 
-    A[Citizen] --> B[Web App / Telegram Bot]
+    A[Citizen] --> B[Web App]
 
-    B --> C[Next.js Frontend / Telegram Webhook]
+    B --> C[Next.js Frontend]
 
     C --> D[FastAPI Backend]
 
@@ -184,9 +184,9 @@ flowchart TD
 
 ### Component responsibilities
 
-**Citizen intake — Web App / Telegram Bot.** Two entry points over one backend contract. The Next.js web app handles browser reporting and complaint tracking; the Telegram bot serves citizens who would rather send a message than install anything. Both collect the same payload — text, optional photo, location — and both normalise into a single complaint intake schema, so intake channels can be added later without touching the pipeline.
+**Citizen intake — Web App.** The Next.js web app handles browser reporting and complaint tracking. It collects text, an optional photo and a location, and normalises them into a single complaint intake schema, so further intake channels can be added later without touching the pipeline.
 
-**Next.js frontend / Telegram webhook.** The frontend renders the citizen reporting flow, complaint status pages, and the admin command center. The Telegram webhook is a thin translation layer from Telegram update objects into the same intake call the web app makes.
+**Next.js frontend.** The frontend renders the citizen reporting flow, complaint status pages, and the admin command center.
 
 **FastAPI backend.** The single API surface and trust boundary. It validates and coerces incoming payloads with Pydantic models, persists the uploaded photo, creates the initial complaint row, assigns the public complaint reference, and hands execution to the workflow orchestrator. Authorization, rate limiting, and request validation belong here rather than inside the agents.
 
@@ -328,7 +328,7 @@ The agent returns a confidence value and a natural-language rationale, and both 
 - **Independent corroboration.** The GeoCluster agent already computes nearby complaints; distinct accounts and devices reporting the same issue in the same cluster raise the authenticity score.
 - **Neighbour confirmation.** Citizens near a reported location can confirm the issue exists, converting a single report into a corroborated one.
 - **Field outcome as ground truth.** When a department closes a ticket, the recorded outcome — genuine and fixed, or not found — is the only true label the system ever gets. It feeds reporter trust scores and, later, model evaluation.
-- **Reporter trust score.** A per-user score that rises with confirmed-genuine reports and falls with rejected ones. New accounts start neutral and are weighted lower, not blocked, so a first-time reporter is never turned away. Phone or Telegram verification establishes identity, and per-user, per-device rate limits cap submission velocity.
+- **Reporter trust score.** A per-user score that rises with confirmed-genuine reports and falls with rejected ones. New accounts start neutral and are weighted lower, not blocked, so a first-time reporter is never turned away. Phone verification establishes identity, and per-user, per-device rate limits cap submission velocity.
 
 ### Layer 7 — Tamper-evident record (integrity, not authenticity)
 
@@ -544,9 +544,6 @@ label, not the routing.
 ### Realtime
 - Supabase Realtime
 
-### Messaging
-- Telegram Bot API
-
 ### Maps & Geocoding
 - Leaflet with OpenStreetMap tiles (no API key required)
 - OpenStreetMap Nominatim for address search and reverse geocoding, proxied
@@ -653,7 +650,7 @@ social_posts
 
 | Entity | Purpose |
 | ------ | ------- |
-| `users` | Citizens and staff — identity, email and password hash, role, the department a staff account is scoped to, a `token_version` counter for session invalidation, verification state, contact channel (including Telegram), and reporter trust score. |
+| `users` | Citizens and staff — identity, email and password hash, role, the department a staff account is scoped to, a `token_version` counter for session invalidation, verification state, contact details, and reporter trust score. |
 | `complaints` | The primary complaint record: description, media reference, location, category, priority, ward, assigned department, external ticket reference, status, and SLA deadline. |
 | `complaint_evidence` | Per-submission evidence record: capture token reference and source (camera or gallery), `server_received_at`, extracted EXIF payload, GPS accuracy and mock-location flag, SHA-256 and perceptual hashes, individual authenticity signals, and the resulting score. |
 | `complaint_events` | Append-only history of everything that happened to a complaint — created, verified, classified, routed, escalated, resolved — with actor and timestamp. |
@@ -734,7 +731,6 @@ Supabase
 PostGIS
 Redis
 Mock government APIs
-Telegram
 ```
 
 The prototype's goal is to demonstrate the **complete autonomous complaint lifecycle** — intake through verification, classification, geographic mapping, routing, ticketing, SLA tracking, and resolution — on a realistic stack, with government connectivity mocked.
@@ -844,8 +840,7 @@ citizen, then sign in as `water@example.com`. Only the water ticket is there —
 and opening the electricity one by reference returns a 404, not a 403.
 
 `/health` is deliberately honest: it reports the active AI provider, whether it
-is a real model, whether Telegram is configured, and that the government APIs
-are mocks — so a running demo cannot misrepresent itself.
+is a real model, and that the government APIs are mocks — so a running demo cannot misrepresent itself.
 
 ### See the whole lifecycle in one command
 
@@ -951,7 +946,7 @@ backend/
                          sla_monitor, social, resolution
     workflow/graph.py    LangGraph orchestration with human-review edges
     services/intake.py   Intake: evidence -> persistence -> pipeline
-    integrations/        Mock BBMP/BWSSB/BESCOM gateway, Telegram client
+    integrations/        Mock BBMP/BWSSB/BESCOM gateway
     worker/              Celery app and the SLA beat schedule
   scripts/
     init_db.py           Schema + seed

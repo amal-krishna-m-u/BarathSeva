@@ -17,6 +17,7 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 
 from app.agents.base import AgentResult, execute
+from app.ai.coerce import as_bool, as_float
 from app.ai.factory import infer
 from app.ai.prompts import build_verify
 from app.config import settings
@@ -61,9 +62,13 @@ def run(db: Session, complaint: Complaint, state: dict[str, Any]) -> AgentResult
         )
         result = infer(request)
 
-        is_civic = bool(result.data.get("is_civic_issue", False))
-        sufficient = bool(result.data.get("evidence_sufficient", False))
-        confidence = float(result.confidence or 0.0)
+        # Never bool(str) here: a model returning the JSON string "false"
+        # would otherwise be recorded as a valid civic issue (bool("false")
+        # is True). Missing/unrecognised values default to the safe,
+        # unverified outcome rather than guessing.
+        is_civic = as_bool(result.data.get("is_civic_issue"), False)
+        sufficient = as_bool(result.data.get("evidence_sufficient"), False)
+        confidence = as_float(result.confidence, 0.0, lo=0.0, hi=1.0)
         rationale = result.rationale or "No rationale returned."
 
         valid = is_civic and sufficient
