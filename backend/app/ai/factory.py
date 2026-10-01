@@ -9,7 +9,6 @@ up; classification quality degrades instead.
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
 
 from app.ai.base import AIProvider, InferenceRequest, InferenceResult
 from app.ai.stub import StubProvider
@@ -52,11 +51,35 @@ def _build_provider() -> AIProvider:
     return StubProvider()
 
 
-@lru_cache
+#: Module-level cached singleton, built lazily on first ``get_provider()``
+#: call. A bare zero-argument ``@lru_cache`` cannot be reset selectively or
+#: hold mutable state alongside the provider (the cooldown ladder in a later
+#: task needs exactly that), so the cache is explicit instead.
+_provider_cache: AIProvider | None = None
+
+
 def get_provider() -> AIProvider:
-    provider = _build_provider()
-    logger.info("AI provider: %s (%s, is_ai=%s)", provider.name, provider.model, provider.is_ai)
-    return provider
+    global _provider_cache
+    if _provider_cache is None:
+        _provider_cache = _build_provider()
+        logger.info(
+            "AI provider: %s (%s, is_ai=%s)",
+            _provider_cache.name,
+            _provider_cache.model,
+            _provider_cache.is_ai,
+        )
+    return _provider_cache
+
+
+def reset_provider_cache() -> None:
+    """Drop the cached provider so the next ``get_provider()`` rebuilds it.
+
+    Tests use this to swap providers between cases (stub <-> fakes) without
+    process restarts; a later task uses it as the reset point for the
+    fallback chain's cooldown state.
+    """
+    global _provider_cache
+    _provider_cache = None
 
 
 _FALLBACK = StubProvider()
@@ -77,4 +100,7 @@ def infer(request: InferenceRequest) -> InferenceResult:
     )
     fallback = _FALLBACK.infer(request)
     fallback.error = f"fell_back_from_{provider.name}: {result.error}"
+    # Additive only: carry forward *why* the primary failed. No branching on
+    # it here — the stub is still used unconditionally, exactly as before.
+    fallback.error_kind = result.error_kind
     return fallback
