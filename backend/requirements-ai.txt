@@ -1,0 +1,4 @@
+# Optional model-provider SDKs. The platform runs without these using the
+# deterministic stub provider (JANSEVA_AI_PROVIDER=stub).
+openai==1.59.6
+google-genai==0.3.0

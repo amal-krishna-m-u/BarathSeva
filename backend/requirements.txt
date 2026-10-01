@@ -1,0 +1,25 @@
+# --- web / api ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+pydantic==2.10.4
+pydantic-settings==2.7.0
+
+# --- database ---
+SQLAlchemy==2.0.36
+GeoAlchemy2==0.17.0
+psycopg2-binary==2.9.10
+
+# --- ai orchestration ---
+langgraph==0.2.60
+
+# --- background processing ---
+celery==5.4.0
+redis==5.2.1
+
+# --- evidence / media ---
+Pillow==11.1.0
+
+# --- misc ---
+httpx==0.28.1
+python-dotenv==1.0.1
