@@ -1,7 +1,10 @@
 # Optional model-provider SDKs. The platform runs without these using the
 # deterministic stub provider (BARATHSEVA_AI_PROVIDER=stub).
 #
-# The nvidia and gemini providers are implemented over plain httpx (already a
-# core dependency) and need NO SDK from this file. This file exists only for
-# the optional openai provider.
+# nvidia is not yet implemented and, when it lands, will need no SDK from
+# this file (plain httpx, already a core dependency). gemini remains
+# SDK-based via google-genai below until a later task moves it onto httpx
+# too — until then, app/ai/gemini_provider.py imports `google.genai`
+# directly, so install this pin to run real Gemini inference today.
 openai==1.59.6
+google-genai==0.3.0
