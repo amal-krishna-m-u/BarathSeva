@@ -1,0 +1,101 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink-950: #07090f;
+  --color-ink-900: #0b0f17;
+  --color-ink-850: #10151f;
+  --color-ink-800: #151b27;
+  --color-ink-700: #1e2534;
+  --color-ink-600: #2b3445;
+  --color-mute: #8b97ad;
+  --color-brand-400: #5eead4;
+  --color-brand-500: #2dd4bf;
+  --color-brand-600: #14b8a6;
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background:
+    radial-gradient(
+      ellipse 80% 50% at 50% -20%,
+      rgba(45, 212, 191, 0.07),
+      transparent
+    ),
+    var(--color-ink-950);
+  color: #e6ebf4;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  min-height: 100dvh;
+}
+
+/* Thin scrollbars so dense data tables do not look cluttered. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-ink-600) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-ink-600);
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Leaflet needs explicit sizing and a dark-friendly surface. */
+.leaflet-container {
+  background: var(--color-ink-900);
+  font-family: var(--font-sans);
+}
+/* Leaflet sets `.leaflet-tile { filter: inherit }` precisely so the filter can
+   be applied to the pane and inherited by every tile. Targeting .leaflet-tile
+   directly loses to leaflet's own rule, which is injected after this file. */
+.leaflet-tile-pane {
+  filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg)
+    saturate(0.3) brightness(0.7);
+}
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+  background: var(--color-ink-800);
+  color: #e6ebf4;
+  box-shadow: 0 10px 40px rgb(0 0 0 / 0.5);
+}
+.leaflet-popup-content {
+  margin: 0.75rem 0.9rem;
+  font-size: 0.8rem;
+}
+.leaflet-control-attribution {
+  background: rgb(11 15 23 / 0.8) !important;
+  color: var(--color-mute) !important;
+}
+.leaflet-control-attribution a {
+  color: var(--color-brand-500) !important;
+}
+.leaflet-bar a {
+  background: var(--color-ink-800) !important;
+  color: #e6ebf4 !important;
+  border-color: var(--color-ink-600) !important;
+}
+
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(45, 212, 191, 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(45, 212, 191, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(45, 212, 191, 0);
+  }
+}
+.live-dot {
+  animation: pulse-ring 2s infinite;
+}

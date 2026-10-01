@@ -1,0 +1,31 @@
+services:
+  db:
+    image: postgis/postgis:15-3.4
+    container_name: barathseva-db
+    environment:
+      POSTGRES_USER: barathseva
+      POSTGRES_PASSWORD: barathseva
+      POSTGRES_DB: barathseva
+    ports:
+      - "55432:5432"
+    volumes:
+      - barathseva-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U barathseva -d barathseva"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: barathseva-redis
+    ports:
+      - "56379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  barathseva-pgdata:

@@ -1,5 +1,18 @@
 # BarathSeva AI — Autonomous Civic Complaint Intelligence Platform
 
+![Python 3.11](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
+![LangGraph](https://img.shields.io/badge/LangGraph-0.2-1C3C3C)
+![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
+![Tailwind CSS](https://img.shields.io/badge/Tailwind-4-06B6D4?logo=tailwindcss&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-4169E1?logo=postgresql&logoColor=white)
+![PostGIS](https://img.shields.io/badge/PostGIS-3.4-336791)
+![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)
+![Celery](https://img.shields.io/badge/Celery-5.4-37814A?logo=celery&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-86%20passing-brightgreen)
+![License](https://img.shields.io/badge/license-MIT-blue)
+
 BarathSeva AI is an AI-powered civic complaint intelligence platform that lets citizens report civic problems — potholes, water leaks, drainage issues, streetlight failures, power outages — using nothing more than a natural-language message, a photo, and a location.
 
 Instead of forcing citizens to navigate multiple government portals and manually work out which department should receive a complaint, BarathSeva AI processes the report automatically. The system verifies the complaint, understands and classifies the issue, identifies the geographic ward and nearby complaint clusters, determines the responsible government department, creates a service ticket, starts SLA tracking, detects hotspots, and generates public accountability updates.
@@ -8,7 +21,7 @@ The prototype targets **Bengaluru** first and is architected so it can later sca
 
 > **One citizen message should be enough to start the complete civic complaint workflow.**
 
-> **Repository status:** This repository currently holds the project documentation and license. The architecture below describes the system BarathSeva AI is being built to; components are documented as designed, not as deployed.
+> **Repository status.** The prototype is implemented and runs end to end: FastAPI + LangGraph backend, Next.js command center, PostgreSQL/PostGIS, Redis/Celery, and the evidence authenticity engine, verified by 86 passing tests against a real PostGIS database. Government connectivity is **mock BBMP / BWSSB / BESCOM endpoints** — there are no real municipal integrations. The default AI provider is a **deterministic rule engine**, so the platform runs with no API keys; set `BARATHSEVA_AI_PROVIDER` to use a real model. See [Running the prototype](#running-the-prototype).
 
 ---
 
@@ -644,6 +657,152 @@ Realtime dashboards / notifications / analytics
 ```
 
 BarathSeva AI is an **autonomous civic complaint orchestration platform** — not a chatbot, and not a complaint form. A chatbot answers a question; a form captures a submission. BarathSeva AI takes one unstructured citizen message and drives the entire municipal workflow behind it: establishing that the evidence is authentic, verifying the issue, classifying it, locating it in a ward, clustering it with related reports, routing it to the responsible department, opening a ticket, holding that ticket to an SLA, escalating breaches, and closing the loop with the citizen — with every decision along the way persisted and auditable.
+
+---
+
+## Running the prototype
+
+### Requirements
+
+| Tool | Why |
+| ---- | --- |
+| Docker | PostgreSQL 15 + PostGIS 3.4 and Redis 7 run as containers |
+| Python 3.11+ | FastAPI, LangGraph, Celery |
+| Node 18+ | Next.js 16 frontend |
+
+No API keys are required. The platform ships with a deterministic rule-based AI
+provider and mock government endpoints, so a clean checkout runs offline.
+
+### Quick start
+
+```bash
+make setup     # create the venv, install backend + frontend dependencies
+make db        # start PostGIS + Redis, create the schema, seed reference data
+make api       # terminal 1 — FastAPI on http://localhost:8000
+make web       # terminal 2 — Next.js on http://localhost:3000
+```
+
+Then open:
+
+| URL | What it is |
+| --- | ---------- |
+| `http://localhost:3000` | Citizen reporting flow (in-app camera capture) |
+| `http://localhost:3000/track` | Complaint tracking by reference |
+| `http://localhost:3000/admin` | Admin command center — map, filters, live feed |
+| `http://localhost:3000/admin/hotspots` | Hotspot analytics and generated content |
+| `http://localhost:8000/docs` | Interactive OpenAPI documentation |
+| `http://localhost:8000/health` | What is actually wired up right now |
+
+`/health` is deliberately honest: it reports the active AI provider, whether it
+is a real model, whether Telegram is configured, and that the government APIs
+are mocks — so a running demo cannot misrepresent itself.
+
+### See the whole lifecycle in one command
+
+```bash
+make demo
+```
+
+This rebuilds the database and drives the real HTTP API through every branch
+the architecture claims to have: a clean capture, corroboration building into a
+hotspot, all three department routes, each class of evidence hard failure
+(reused image, out-of-area coordinates, missing and replayed capture tokens),
+the degraded paths (stale edited photo, spoofed GPS), verifier rejection of
+non-civic noise, an SLA breach with escalation and amplification, and
+resolution with the citizen message.
+
+### Background SLA processing
+
+The SLA sweep is the one part that must run without anyone triggering it —
+deadlines pass on their own.
+
+```bash
+make worker    # Celery worker
+make beat      # Celery beat — sweeps every 5 minutes
+```
+
+The same sweep is exposed as `POST /api/admin/sla/sweep` (and a button in the
+command center) so the lifecycle can be demonstrated without a worker running.
+
+### Tests
+
+```bash
+make test      # 86 tests
+```
+
+The suite runs against a real PostGIS database (`barathseva_test`, created
+automatically), not a mock. The geospatial logic *is* the behaviour under
+test — ward containment, radius search and DBSCAN clustering have no
+meaningful in-memory substitute, so a fake would only prove the fake works.
+
+### Using a real model
+
+```bash
+export BARATHSEVA_AI_PROVIDER=openai
+export BARATHSEVA_OPENAI_API_KEY=sk-...
+pip install -r backend/requirements-ai.txt
+```
+
+Gemini works the same way with `BARATHSEVA_AI_PROVIDER=gemini`. If a configured
+provider is unusable — missing SDK, missing key, or a failing call — the
+platform falls back to the deterministic provider rather than dropping the
+complaint. Intake never depends on a third party being up; classification
+quality degrades instead.
+
+### Configuration
+
+Every policy threshold in Section 5 is environment-configurable with the
+`BARATHSEVA_` prefix — capture-token TTL, EXIF tolerances, GPS accuracy limits,
+perceptual-hash bands, authenticity score bands, cluster radius and the hotspot
+threshold. See [`backend/.env.example`](backend/.env.example) for the full list
+with defaults. `GET /api/config` serves the same values to the frontend, so the
+UI explains the thresholds the backend actually enforces instead of keeping its
+own copy.
+
+---
+
+## Project structure
+
+```text
+backend/
+  app/
+    main.py              FastAPI app — the single API surface and trust boundary
+    config.py            Environment-driven settings; every policy threshold
+    models.py            SQLAlchemy models — the source of truth
+    schemas.py           Pydantic request/response contracts
+    seed.py              Idempotent wards / departments / SLA policies
+    core/
+      authenticity.py    Evidence engine: Layers 1-4 and 6, plus scoring
+      security.py        HMAC capture tokens (Layer 1)
+      exif.py            EXIF and file forensics (Layer 2)
+      geo.py             PostGIS containment, radius search, DBSCAN hotspots
+      hashing.py         SHA-256, dHash perceptual hashing, audit hash chain
+      sla.py             Deadline arithmetic from stored policy
+      departments.py     Deterministic category -> department routing
+      events.py          Append-only, hash-chained audit trail
+      city.py            Bengaluru ward/department configuration
+    ai/
+      base.py            Provider-agnostic inference contract
+      stub.py            Deterministic provider — runs with no API key
+      openai_provider.py / gemini_provider.py / factory.py
+      prompts.py         Prompt construction for model-backed providers
+    agents/              verifier, classifier, geocluster, dispatcher,
+                         sla_monitor, social, resolution
+    workflow/graph.py    LangGraph orchestration with human-review edges
+    services/intake.py   Intake: evidence -> persistence -> pipeline
+    integrations/        Mock BBMP/BWSSB/BESCOM gateway, Telegram client
+    worker/              Celery app and the SLA beat schedule
+  scripts/
+    init_db.py           Schema + seed
+    demo_lifecycle.py    End-to-end demonstration over the real API
+    make_test_photo.py   Synthetic JPEGs with real EXIF for testing
+  tests/                 86 tests against real PostGIS
+
+frontend/
+  app/                   Citizen report, tracking, command center, hotspots
+  components/            Report form, evidence panel, map, live feed
+  lib/                   API client, types, formatting
+```
 
 ---
 

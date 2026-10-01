@@ -1,0 +1,33 @@
+# --- python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- node ---
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# --- env / secrets ---
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# --- runtime artefacts ---
+backend/media/
+backend/media_test/
+*.log
+
+# --- os / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
