@@ -516,27 +516,36 @@ satisfy the same structural interface.
 
 Fixes D5. **GC3 is the binding constraint here** — `/health` is public.
 
-- In-process counter registry: calls, successes, and failures keyed by
-  `(provider, error_kind)`, plus fallback-served and cooldown-entered counts.
-  Lock-guarded, with `snapshot()` and `reset()`. **No DB migration** — this
-  project has no migration tooling and adding columns is out of scope.
-- `factory.infer()` / `ChainProvider` record into it.
+> **Trimmed by drift audit (Ruling 8).** The counter registry and the
+> `GET /api/admin/ai-status` endpoint are CUT. Build only the `/health` state
+> field below. Rationale: `/health`'s own docstring promises it "reports what is
+> actually wired up, so a demo never misrepresents itself" — with three providers
+> and a fallback ladder, it must say which provider actually served traffic. That
+> is the aligned part. A new admin analytics surface answering "how often did we
+> fall back last week" is an ops question this prototype has no operator for;
+> gap D5 is deferred, not built. Fallback events remain visible in logs.
 - `/health`'s `ai` block gains **only** `state`, one of
   `active | cooled_down | degraded | not_configured`, alongside the existing
   `provider`/`model`/`is_real_model`. Explicitly NOT: keys, key-presence,
   base URLs, quota numbers, or raw error strings.
-- Full detail — per-provider counters, `error_kind` breakdown, cooldown
-  seconds remaining — goes on a **new admin-gated** endpoint
-  `GET /api/admin/ai-status`, behind the same dependency the rest of
-  `/api/admin/*` already uses. Do not weaken that gate, and do not touch the
+- Do NOT add `GET /api/admin/ai-status` (cut). Do not touch the
   `/api/admin/stream` route (GC6).
 
-**Tests:** counters increment correctly across the ladder; `/health` exposes
-the four allowed fields and a test asserts the response body contains **no**
-API key, no base URL, and no raw provider error text; `/api/admin/ai-status`
-requires auth and returns the detail; cooldown is reflected as `cooled_down`.
+**Tests:** `/health` exposes the four allowed fields and a test asserts the
+response body contains **no** API key, no base URL, and no raw provider error
+text; cooldown is reflected as `cooled_down`; the stub-only default reports
+`not_configured` or `active` consistently with `is_real_model`.
 
-#### Task 11 — Department status callback webhook
+#### Task 11 — Department status callback webhook — **CUT (do not implement)**
+
+> **Cut by drift audit (Ruling 7).** README:565 states real municipal integrations
+> "are a future production-stage concern and are not represented as integrated;
+> they require formal access, credentials, and agreements that this project does
+> not claim to hold." An inbound webhook that mutates complaint status is that
+> production machinery, and would be the only inbound writer to status in the whole
+> system. The ask was "mock apis" — Tasks 7 and 9 deliver those. The requirements
+> below are retained verbatim so this can be reinstated deliberately if a demo ever
+> needs a department to close a ticket. **No implementer should pick this up.**
 **Files:** `backend/app/api/gov_callback.py` (new), `backend/app/api/mock_gov_api.py`, `backend/app/main.py`
 **Depends on:** Tasks 7, 9.
 
@@ -640,7 +649,7 @@ API key set and no network access.
 
 ## 5. Execution notes
 
-- **Waves:** 0 → {2,6} → {3,4,5,7} → {8,9} → {10,11} → 12.
+- **Waves:** 0 → {2,6} → {3,4,5,7} → {8,9} → {10} → 12. (Task 11 cut; Wave 4 is Task 10 alone.)
 - `app/main.py` is touched by Tasks 6, 7, and 11 (router registration only).
   Those are in different waves except 6 and 7 — assign both `main.py` edits to
   Task 7's implementer and have Task 6 only create its router, to avoid a
