@@ -564,14 +564,29 @@ def test_ai_provider(provider: str, db: Session = Depends(get_db)) -> ProviderTe
         schema={"ok": "boolean"},
     )
     result = built.infer(probe)
+    detail = str(result.error)[:300] if result.error else None
+    if not result.ok and result.error_kind == "TIMEOUT":
+        detail = (
+            f"{detail or 'timed out'} — this model did not answer within "
+            f"{int(TEST_PROBE_TIMEOUT_SECONDS)}s. The key may still be valid; "
+            "the model is simply too slow to serve the intake path."
+        )
     return ProviderTestResult(
         provider=provider,
         model=resolved.model,
         ok=bool(result.ok),
         latency_ms=result.latency_ms,
         error_kind=result.error_kind,
-        detail=(str(result.error)[:300] if result.error else None),
+        detail=detail,
     )
+
+
+#: A "does this key work" check is a deliberate operator action, not a citizen
+#: waiting on intake, so it may wait far longer than the request timeout.
+#: Kimi K3 on NIM measured 206-224s for a trivial completion; at the 25s intake
+#: timeout its key could never be verified at all, and the operator would read
+#: a working key as broken.
+TEST_PROBE_TIMEOUT_SECONDS = 260.0
 
 
 def _build_test_provider(provider: str, resolved):
@@ -591,7 +606,7 @@ def _build_test_provider(provider: str, resolved):
             resolved.api_key,
             resolved.model,
             settings.nvidia_base_url,
-            settings.ai_request_timeout_seconds,
+            TEST_PROBE_TIMEOUT_SECONDS,
         )
     from app.ai.openai_provider import OpenAIProvider
 

@@ -30,6 +30,13 @@ const MODEL_SUGGESTIONS: Record<string, string[]> = {
   openai: ["gpt-4o-mini", "gpt-4o"],
 };
 
+/** Providers whose test call is genuinely slow, so the operator is not left
+ *  wondering whether the button is broken. Kimi K3 on NIM measured ~195s. */
+const SLOW_TEST_NOTE: Record<string, string> = {
+  nvidia:
+    "Kimi K3 answers in roughly 3 minutes — the test will sit there that long. That latency is also why it cannot serve live intake.",
+};
+
 const SOURCE_NOTE: Record<string, string> = {
   database: "Saved here in the dashboard",
   environment: "From the server environment (.env)",
@@ -242,7 +249,7 @@ function ProviderCard({
           className="rounded-lg border border-white/15 px-4 py-2 text-sm text-white disabled:opacity-40"
           title="Makes one real call to confirm the key works"
         >
-          {busy === "test" ? "Testing…" : "Test key"}
+          {busy === "test" ? "Testing… (can take minutes)" : "Test key"}
         </button>
         {provider.source === "database" ? (
           <button
@@ -255,6 +262,10 @@ function ProviderCard({
           </button>
         ) : null}
       </div>
+
+      {SLOW_TEST_NOTE[provider.provider] ? (
+        <p className="mt-3 text-xs text-mute">{SLOW_TEST_NOTE[provider.provider]}</p>
+      ) : null}
 
       {message ? <p className="mt-3 text-sm text-mute">{message}</p> : null}
 
