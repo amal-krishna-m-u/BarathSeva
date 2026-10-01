@@ -1,4 +1,4 @@
-import ReportForm from "@/components/ReportForm";
+import ReportGate from "@/components/ReportGate";
 
 export default function HomePage() {
   return (
@@ -16,7 +16,7 @@ export default function HomePage() {
           problem.
         </p>
       </div>
-      <ReportForm />
+      <ReportGate />
     </div>
   );
 }

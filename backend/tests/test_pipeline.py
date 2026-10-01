@@ -399,12 +399,14 @@ class TestHttpApi:
         )
         assert response.status_code == 422
 
-    def test_admin_endpoints_serve_the_command_center(self, as_super_admin, photo):
-        token = as_super_admin.post(
+    def test_admin_endpoints_serve_the_command_center(self, as_super_admin, as_citizen, photo):
+        # Submitted by a citizen, read back by the admin: staff accounts cannot
+        # file reports, and submitting as one here was only ever convenience.
+        token = as_citizen.post(
             "/api/capture-token",
             json={"latitude": KORAMANGALA[0], "longitude": KORAMANGALA[1]},
         ).json()
-        as_super_admin.post(
+        as_citizen.post(
             "/api/complaints",
             data={
                 "description": "Deep pothole near the junction, very dangerous",
@@ -432,9 +434,9 @@ class TestHttpApi:
         assert len(wards) == 18
         assert wards[0]["boundary"]["type"] == "MultiPolygon"
 
-    def test_filters_narrow_the_feed(self, as_super_admin, photo):
-        token = as_super_admin.post("/api/capture-token", json={}).json()
-        as_super_admin.post(
+    def test_filters_narrow_the_feed(self, as_super_admin, as_citizen, photo):
+        token = as_citizen.post("/api/capture-token", json={}).json()
+        as_citizen.post(
             "/api/complaints",
             data={
                 "description": "Garbage not collected for a week near the gate",
@@ -453,9 +455,10 @@ class TestHttpApi:
         body = as_super_admin.post("/api/admin/sla/sweep").json()
         assert "checked" in body and "clusters_updated" in body
 
-    def test_resolve_endpoint_closes_the_complaint(self, as_super_admin, photo):
-        token = as_super_admin.post("/api/capture-token", json={}).json()
-        created = as_super_admin.post(
+    def test_resolve_endpoint_closes_the_complaint(self, as_super_admin, as_citizen, photo):
+        # Filed by a citizen, resolved by staff: staff cannot file reports.
+        token = as_citizen.post("/api/capture-token", json={}).json()
+        created = as_citizen.post(
             "/api/complaints",
             data={
                 "description": "Pothole near the bus stop, quite deep",
@@ -480,9 +483,10 @@ class TestHttpApi:
         )
         assert again.status_code == 409
 
-    def test_invalid_field_outcome_rejected(self, as_super_admin, photo):
-        token = as_super_admin.post("/api/capture-token", json={}).json()
-        created = as_super_admin.post(
+    def test_invalid_field_outcome_rejected(self, as_super_admin, as_citizen, photo):
+        # Filed by a citizen, resolved by staff: staff cannot file reports.
+        token = as_citizen.post("/api/capture-token", json={}).json()
+        created = as_citizen.post(
             "/api/complaints",
             data={
                 "description": "Pothole near the market, deep",
@@ -501,3 +505,79 @@ class TestHttpApi:
 
     def test_telegram_status_reports_disabled(self, client):
         assert client.get("/api/telegram/status").json()["enabled"] is False
+
+
+class TestStaffCannotFileReports:
+    """Reporting is a citizen action; staff accounts are read/act-only.
+
+    The department desk and the command center exist to triage and resolve what
+    citizens report. A staff account filing its own complaint muddies the one
+    ground-truth signal the system has about who is reporting what, so the
+    server refuses it rather than relying on the UI hiding the form.
+    """
+
+    def test_super_admin_cannot_submit_a_complaint(self, as_super_admin, photo):
+        response = as_super_admin.post(
+            "/api/complaints",
+            data={
+                "description": "Deep pothole near the junction, very dangerous",
+                "latitude": str(KORAMANGALA[0]),
+                "longitude": str(KORAMANGALA[1]),
+            },
+            files={"photo": ("e.jpg", photo(*KORAMANGALA, seed=5), "image/jpeg")},
+        )
+        assert response.status_code == 403
+
+    def test_dept_admin_cannot_submit_a_complaint(self, as_roads_admin, photo):
+        response = as_roads_admin.post(
+            "/api/complaints",
+            data={
+                "description": "Garbage piled up outside the market gate",
+                "latitude": str(KORAMANGALA[0]),
+                "longitude": str(KORAMANGALA[1]),
+            },
+            files={"photo": ("e.jpg", photo(*KORAMANGALA, seed=6), "image/jpeg")},
+        )
+        assert response.status_code == 403
+
+    def test_staff_cannot_even_obtain_a_capture_token(self, as_super_admin):
+        """Fail at the camera step, not after the citizen uploads a photo."""
+        response = as_super_admin.post(
+            "/api/capture-token",
+            json={"latitude": KORAMANGALA[0], "longitude": KORAMANGALA[1]},
+        )
+        assert response.status_code == 403
+
+    def test_citizen_can_still_submit(self, as_citizen, photo):
+        token = as_citizen.post(
+            "/api/capture-token",
+            json={"latitude": KORAMANGALA[0], "longitude": KORAMANGALA[1]},
+        )
+        assert token.status_code == 200
+        response = as_citizen.post(
+            "/api/complaints",
+            data={
+                "description": "Streetlight out on the whole stretch after 7pm",
+                "latitude": str(KORAMANGALA[0]),
+                "longitude": str(KORAMANGALA[1]),
+                "capture_token": token.json()["token"],
+                "gps_accuracy_meters": "8",
+            },
+            files={"photo": ("e.jpg", photo(*KORAMANGALA, seed=7), "image/jpeg")},
+        )
+        assert response.status_code == 200
+
+    def test_anonymous_submission_is_unaffected(self, client, photo):
+        """The citizen-without-an-account path is deliberately left open."""
+        response = client.post(
+            "/api/complaints",
+            data={
+                "description": "Water leaking from the main pipe for two days",
+                "latitude": str(KORAMANGALA[0]),
+                "longitude": str(KORAMANGALA[1]),
+                "reporter_phone": "9000000001",
+                "reporter_name": "Anon Reporter",
+            },
+            files={"photo": ("e.jpg", photo(*KORAMANGALA, seed=8), "image/jpeg")},
+        )
+        assert response.status_code == 200
